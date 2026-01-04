@@ -23,7 +23,7 @@ use crate::modules::filesystem_scan::scan_path;
 // - putting all modules in an array and looping over that list instead of a fixed sequence
 // - restructuring project to multiple files
 
-const VERSION: &str = "2.0.1-alpha";
+const VERSION: &str = "2.0.2-alpha";
 
 const SIGNATURE_SOURCE: &str = "./signatures";
 const MODULES: &'static [&'static str] = &["FileScan", "ProcessCheck"];
