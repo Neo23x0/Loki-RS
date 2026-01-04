@@ -7,6 +7,8 @@ use flexi_logger::*;
 use colored::Colorize;
 use arrayvec::ArrayVec;
 use csv::ReaderBuilder;
+use rayon::ThreadPoolBuilder;
+use chrono::Local;
 
 use yara_x::{Compiler, Rules};
 
@@ -23,7 +25,7 @@ use crate::modules::filesystem_scan::scan_path;
 // - putting all modules in an array and looping over that list instead of a fixed sequence
 // - restructuring project to multiple files
 
-const VERSION: &str = "2.0.2-alpha";
+const VERSION: &str = "2.1.0";
 
 const SIGNATURE_SOURCE: &str = "./signatures";
 const MODULES: &'static [&'static str] = &["FileScan", "ProcessCheck"];
@@ -51,6 +53,8 @@ pub struct ScanConfig {
     pub warning_threshold: i16,
     pub notice_threshold: i16,
     pub max_reasons: usize,
+    pub threads: usize,
+    pub cpu_limit: u8,
 }
 
 #[derive(Debug)]
@@ -188,10 +192,10 @@ fn initialize_hash_iocs() -> Vec<HashIOC> {
         log::trace!("Read hash IOC HASH: {} DESC: {} SCORE: {} TYPE: {:?}", hash, description, score, hash_type);
         hash_iocs.push(
             HashIOC { 
-                hash_type: hash_type,
+                hash_type,
                 hash_value: hash, 
-                description: description, 
-                score: score,
+                description, 
+                score,
             });
     }
     log::info!("Successfully initialized {} hash values", hash_iocs.len());
@@ -472,8 +476,9 @@ pub fn check_c2_match<'a>(remote_addr: &str, c2_iocs: &'a [C2IOC]) -> Option<&'a
             // TODO: CIDR match (would need ipnet crate)
             // For now, we'll do exact match only
         } else {
-            // For domains: substring match (e.g., "evildomain.com" matches "dga1.evildomain.com")
-            if remote_lower.contains(&c2_ioc.server) || c2_ioc.server.contains(&remote_lower) {
+            // For domains: check if remote ends with the IOC domain
+            // e.g., "dga1.evildomain.com" matches IOC "evildomain.com"
+            if remote_lower.ends_with(&c2_ioc.server) || remote_lower == c2_ioc.server {
                 return Some(c2_ioc);
             }
         }
@@ -604,10 +609,10 @@ fn initialize_filename_iocs() -> Vec<FilenameIOC> {
             filename_iocs.push(
                 FilenameIOC { 
                     pattern: pattern.to_string(),
-                    regex: regex,
-                    regex_fp: regex_fp,
+                    regex,
+                    regex_fp,
                     description: description.clone(), 
-                    score: score,
+                    score,
                 });
         }
     }
@@ -793,21 +798,23 @@ fn main() {
     // Parsing command line flags
     let (args, _rest) = opts! {
         synopsis "LOKI YARA and IOC Scanner";
+        opt cpu_limit:u8=100, desc:"CPU utilization limit percentage (1-100, default: 100)";
         opt max_file_size:usize=10_000_000, desc:"Maximum file size to scan";
         opt show_access_errors:bool, desc:"Show all file and process access errors";
-        opt scan_all_files:bool, desc:"Scan all files regardless of their file type / extension";
         opt scan_all_drives:bool, desc:"Scan all drives (including mounted drives, usb drives, cloud drives)";
+        opt scan_all_files:bool, desc:"Scan all files regardless of their file type / extension";
         opt debug:bool, desc:"Show debugging information";
         opt trace:bool, desc:"Show very verbose trace output";
+        opt folder:Option<String>, desc:"Folder to scan";
         opt noprocs:bool, desc:"Don't scan processes";
         opt nofs:bool, desc:"Don't scan the file system";
-        opt folder:Option<String>, desc:"Folder to scan"; // an optional (positional) parameter
         opt alert_level:i16=80, desc:"Alert score threshold (default: 80)";
         opt warning_level:i16=60, desc:"Warning score threshold (default: 60)";
         opt notice_level:i16=40, desc:"Notice score threshold (default: 40)";
         opt max_reasons:usize=2, desc:"Maximum number of reasons to show (default: 2)";
         opt jsonl:Option<String>, desc:"Enable JSONL output to specified file";
         opt version:bool, desc:"Show version information and exit";
+        opt threads:i32=-2, desc:"Number of threads to use (0=all cores, -1=all-1, -2=all-2)";
     }.parse_or_exit();
     
     // Handle version flag
@@ -816,34 +823,36 @@ fn main() {
         std::process::exit(0);
     }
     
-    // Validate thresholds
-    if args.alert_level < args.warning_level || args.warning_level < args.notice_level {
-        eprintln!("Error: Thresholds must be in order: alert >= warning >= notice");
-        eprintln!("  Alert: {}, Warning: {}, Notice: {}", args.alert_level, args.warning_level, args.notice_level);
-        std::process::exit(1);
-    }
-    
-    // Create a config
-    let scan_config = ScanConfig {
-        max_file_size: args.max_file_size,
-        show_access_errors: args.show_access_errors,
-        scan_all_types: args.scan_all_files,
-        scan_all_drives: args.scan_all_drives,
-        alert_threshold: args.alert_level,
-        warning_threshold: args.warning_level,
-        notice_threshold: args.notice_level,
-        max_reasons: args.max_reasons,
+    // Determine number of threads
+    let num_threads = if args.threads > 0 {
+        args.threads as usize
+    } else if args.threads == 0 {
+        num_cpus::get()
+    } else {
+        let cpus = num_cpus::get();
+        if args.threads == -1 {
+             if cpus > 1 { cpus - 1 } else { 1 }
+        } else if args.threads == -2 {
+             if cpus > 2 { cpus - 2 } else { 1 }
+        } else {
+             // Fallback for other negative numbers, treat as 1 or default?
+             // User only specified -1 and -2. Let's default to 1 for other negative values or clamp.
+             1
+        }
     };
+    
+    // Start time
+    let start_time = Local::now();
 
     // Logger
     let mut log_level: String = "info".to_string(); let mut std_out = Duplicate::Info; // default
     if args.debug { log_level = "debug".to_string(); std_out = Duplicate::Debug; }  // set to debug level
     if args.trace { log_level = "trace".to_string(); std_out = Duplicate::Trace; }  // set to trace level
     let log_file_name = format!("loki_{}", get_hostname());
-    Logger::try_with_str(log_level).unwrap()
+    let logger_handle = Logger::try_with_str(log_level).unwrap()
         .log_to_file(
             FileSpec::default()
-                .basename(log_file_name)
+                .basename(log_file_name.clone())
         )
         .use_utc()
         .format(log_cmdline_format)
@@ -853,6 +862,12 @@ fn main() {
         .start()
         .unwrap();
     log::info!("LOKI scan started VERSION: {}", VERSION);
+
+    // Configure thread pool
+    match ThreadPoolBuilder::new().num_threads(num_threads).build_global() {
+        Ok(_) => log::info!("Initialized thread pool with {} threads", num_threads),
+        Err(e) => log::error!("Failed to initialize thread pool: {}", e),
+    }
 
     // Initialize JSONL logger if requested
     let jsonl_logger: Option<JsonlLogger> = if let Some(ref jsonl_file) = args.jsonl {
@@ -872,6 +887,7 @@ fn main() {
 
     // Print platform & environment information
     evaluate_env();
+    log::info!("Thread pool THREADS: {} (requested: {})", num_threads, args.threads);
 
     // Evaluate active modules
     let mut active_modules: ArrayVec<String, 20> = ArrayVec::<String, 20>::new();
@@ -890,6 +906,27 @@ fn main() {
     if let Some(args_target_folder) = args.folder {
         target_folder = args_target_folder;
     }
+
+    // Validate thresholds
+    if args.alert_level < args.warning_level || args.warning_level < args.notice_level {
+        eprintln!("Error: Thresholds must be in order: alert >= warning >= notice");
+        eprintln!("  Alert: {}, Warning: {}, Notice: {}", args.alert_level, args.warning_level, args.notice_level);
+        std::process::exit(1);
+    }
+    
+    // Create a config
+    let scan_config = ScanConfig {
+        max_file_size: args.max_file_size,
+        show_access_errors: args.show_access_errors,
+        scan_all_types: args.scan_all_files,
+        scan_all_drives: args.scan_all_drives,
+        alert_threshold: args.alert_level,
+        warning_threshold: args.warning_level,
+        notice_threshold: args.notice_level,
+        max_reasons: args.max_reasons,
+        threads: num_threads,
+        cpu_limit: args.cpu_limit,
+    };
     
     // Initialize IOCs 
     log::info!("Initialize hash IOCs ...");
@@ -918,7 +955,7 @@ fn main() {
     let (proc_scanned, proc_matched, proc_alerts, proc_warnings, proc_notices) = 
         if active_modules.contains(&"ProcessCheck".to_owned()) {
             log::info!("Scanning running processes ... ");
-            scan_processes(&compiled_rules, &scan_config, &c2_iocs, jsonl_logger.as_ref())
+            scan_processes(&compiled_rules, &scan_config, &c2_iocs, jsonl_logger.as_ref(), None)
         } else {
             (0, 0, 0, 0, 0)
         };
@@ -927,7 +964,7 @@ fn main() {
     let (files_scanned, files_matched, file_alerts, file_warnings, file_notices) = 
         if active_modules.contains(&"FileScan".to_owned()) {
             log::info!("Scanning local file system ... ");
-            scan_path(target_folder, &compiled_rules, &scan_config, &hash_collections, &fp_hash_collections, &filename_iocs, jsonl_logger.as_ref())
+            scan_path(target_folder, &compiled_rules, &scan_config, &hash_collections, &fp_hash_collections, &filename_iocs, jsonl_logger.as_ref(), None)
         } else {
             (0, 0, 0, 0, 0)
         };
@@ -937,12 +974,36 @@ fn main() {
     let total_warnings = file_warnings + proc_warnings;
     let total_notices = file_notices + proc_notices;
     
+    // Capture end time and calculate duration
+    let end_time = Local::now();
+    let duration = end_time.signed_duration_since(start_time);
+    
     // Print summary
     log::info!("LOKI scan finished");
     log::info!("Summary - Files scanned: {} Matched: {} | Processes scanned: {} Matched: {} | Alerts: {} Warnings: {} Notices: {}", 
         files_scanned, files_matched,
         proc_scanned, proc_matched,
         total_alerts, total_warnings, total_notices);
+        
+    // Print duration and time
+    log::info!("Scan Duration: {:.2}s (Start: {}, End: {})", 
+        duration.num_milliseconds() as f64 / 1000.0,
+        start_time.format("%Y-%m-%d %H:%M:%S"),
+        end_time.format("%Y-%m-%d %H:%M:%S"));
+        
+    // Print output file locations
+    // Log file
+    // Check if we can find the log file
+    if let Ok(files) = logger_handle.existing_log_files(&LogfileSelector::default()) {
+        if let Some(latest_log) = files.last() {
+            log::info!("Log file written to: {}", latest_log.display());
+        } else {
+            // Fallback if vector is empty but logging is active
+            log::info!("Log file written to: ./{}_<date>_r<rotation>.log", log_file_name);
+        }
+    } else {
+        log::info!("Log file written to: ./{}_<date>_r<rotation>.log", log_file_name);
+    }
     
     // Determine exit code
     // 0 = success (no matches or only notices)
@@ -955,4 +1016,461 @@ fn main() {
     };
     
     std::process::exit(exit_code);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    mod hash_type_tests {
+        use super::*;
+
+        #[test]
+        fn test_md5_hash_type() {
+            let hash = "d41d8cd98f00b204e9800998ecf8427e";
+            assert!(matches!(get_hash_type(hash), HashType::Md5));
+        }
+
+        #[test]
+        fn test_sha1_hash_type() {
+            let hash = "da39a3ee5e6b4b0d3255bfef95601890afd80709";
+            assert!(matches!(get_hash_type(hash), HashType::Sha1));
+        }
+
+        #[test]
+        fn test_sha256_hash_type() {
+            let hash = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
+            assert!(matches!(get_hash_type(hash), HashType::Sha256));
+        }
+
+        #[test]
+        fn test_unknown_hash_type_short() {
+            let hash = "abc123";
+            assert!(matches!(get_hash_type(hash), HashType::Unknown));
+        }
+
+        #[test]
+        fn test_unknown_hash_type_long() {
+            let hash = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855aa";
+            assert!(matches!(get_hash_type(hash), HashType::Unknown));
+        }
+
+        #[test]
+        fn test_empty_hash() {
+            let hash = "";
+            assert!(matches!(get_hash_type(hash), HashType::Unknown));
+        }
+    }
+
+    mod ip_address_tests {
+        use super::*;
+
+        #[test]
+        fn test_valid_ipv4() {
+            assert!(is_ip_address("192.168.1.1"));
+            assert!(is_ip_address("10.0.0.1"));
+            assert!(is_ip_address("127.0.0.1"));
+            assert!(is_ip_address("0.0.0.0"));
+            assert!(is_ip_address("255.255.255.255"));
+        }
+
+        #[test]
+        fn test_invalid_ipv4_wrong_parts() {
+            assert!(!is_ip_address("192.168.1"));
+            assert!(!is_ip_address("192.168.1.1.1"));
+            assert!(!is_ip_address("192.168"));
+        }
+
+        #[test]
+        fn test_invalid_ipv4_out_of_range() {
+            assert!(!is_ip_address("256.168.1.1"));
+            assert!(!is_ip_address("192.168.1.256"));
+        }
+
+        #[test]
+        fn test_invalid_ipv4_non_numeric() {
+            assert!(!is_ip_address("192.168.1.abc"));
+            assert!(!is_ip_address("not.an.ip.address"));
+        }
+
+        #[test]
+        fn test_domain_not_ip() {
+            assert!(!is_ip_address("example.com"));
+            assert!(!is_ip_address("malware.evil.com"));
+        }
+    }
+
+    mod c2_matching_tests {
+        use super::*;
+
+        fn create_test_c2_iocs() -> Vec<C2IOC> {
+            vec![
+                C2IOC {
+                    server: "192.168.1.100".to_string(),
+                    description: "Test C2 IP".to_string(),
+                    score: 80,
+                },
+                C2IOC {
+                    server: "evil.com".to_string(),
+                    description: "Test C2 domain".to_string(),
+                    score: 75,
+                },
+                C2IOC {
+                    server: "malware.net".to_string(),
+                    description: "Test C2 domain 2".to_string(),
+                    score: 70,
+                },
+            ]
+        }
+
+        #[test]
+        fn test_c2_exact_ip_match() {
+            let c2_iocs = create_test_c2_iocs();
+            let result = check_c2_match("192.168.1.100", &c2_iocs);
+            assert!(result.is_some());
+            assert_eq!(result.unwrap().score, 80);
+        }
+
+        #[test]
+        fn test_c2_no_ip_match() {
+            let c2_iocs = create_test_c2_iocs();
+            let result = check_c2_match("10.0.0.1", &c2_iocs);
+            assert!(result.is_none());
+        }
+
+        #[test]
+        fn test_c2_exact_domain_match() {
+            let c2_iocs = create_test_c2_iocs();
+            let result = check_c2_match("evil.com", &c2_iocs);
+            assert!(result.is_some());
+            assert_eq!(result.unwrap().score, 75);
+        }
+
+        #[test]
+        fn test_c2_subdomain_match() {
+            let c2_iocs = create_test_c2_iocs();
+            let result = check_c2_match("dga.evil.com", &c2_iocs);
+            assert!(result.is_some());
+            assert_eq!(result.unwrap().description, "Test C2 domain");
+        }
+
+        #[test]
+        fn test_c2_no_domain_match() {
+            let c2_iocs = create_test_c2_iocs();
+            let result = check_c2_match("goodsite.org", &c2_iocs);
+            assert!(result.is_none());
+        }
+
+        #[test]
+        fn test_c2_case_insensitive() {
+            let c2_iocs = create_test_c2_iocs();
+            let result = check_c2_match("EVIL.COM", &c2_iocs);
+            assert!(result.is_some());
+        }
+    }
+
+    mod hash_ioc_search_tests {
+        use super::*;
+
+        fn create_test_hash_iocs() -> Vec<HashIOC> {
+            let mut iocs = vec![
+                HashIOC {
+                    hash_type: HashType::Md5,
+                    hash_value: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(),
+                    description: "Test hash A".to_string(),
+                    score: 80,
+                },
+                HashIOC {
+                    hash_type: HashType::Md5,
+                    hash_value: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".to_string(),
+                    description: "Test hash B".to_string(),
+                    score: 75,
+                },
+                HashIOC {
+                    hash_type: HashType::Md5,
+                    hash_value: "cccccccccccccccccccccccccccccccc".to_string(),
+                    description: "Test hash C".to_string(),
+                    score: 70,
+                },
+            ];
+            iocs.sort_by(|a, b| a.hash_value.cmp(&b.hash_value));
+            iocs
+        }
+
+        #[test]
+        fn test_find_existing_hash() {
+            let iocs = create_test_hash_iocs();
+            let result = find_hash_ioc("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", &iocs);
+            assert!(result.is_some());
+            assert_eq!(result.unwrap().score, 75);
+        }
+
+        #[test]
+        fn test_find_first_hash() {
+            let iocs = create_test_hash_iocs();
+            let result = find_hash_ioc("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", &iocs);
+            assert!(result.is_some());
+            assert_eq!(result.unwrap().description, "Test hash A");
+        }
+
+        #[test]
+        fn test_find_last_hash() {
+            let iocs = create_test_hash_iocs();
+            let result = find_hash_ioc("cccccccccccccccccccccccccccccccc", &iocs);
+            assert!(result.is_some());
+            assert_eq!(result.unwrap().description, "Test hash C");
+        }
+
+        #[test]
+        fn test_hash_not_found() {
+            let iocs = create_test_hash_iocs();
+            let result = find_hash_ioc("dddddddddddddddddddddddddddddddd", &iocs);
+            assert!(result.is_none());
+        }
+
+        #[test]
+        fn test_empty_iocs() {
+            let iocs: Vec<HashIOC> = Vec::new();
+            let result = find_hash_ioc("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", &iocs);
+            assert!(result.is_none());
+        }
+    }
+
+    mod hash_collection_tests {
+        use super::*;
+
+        #[test]
+        fn test_organize_hash_iocs_by_type() {
+            let hash_iocs = vec![
+                HashIOC {
+                    hash_type: HashType::Md5,
+                    hash_value: "d41d8cd98f00b204e9800998ecf8427e".to_string(),
+                    description: "MD5 test".to_string(),
+                    score: 75,
+                },
+                HashIOC {
+                    hash_type: HashType::Sha1,
+                    hash_value: "da39a3ee5e6b4b0d3255bfef95601890afd80709".to_string(),
+                    description: "SHA1 test".to_string(),
+                    score: 80,
+                },
+                HashIOC {
+                    hash_type: HashType::Sha256,
+                    hash_value: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855".to_string(),
+                    description: "SHA256 test".to_string(),
+                    score: 85,
+                },
+            ];
+
+            let collections = organize_hash_iocs(hash_iocs, "test");
+
+            assert_eq!(collections.md5_iocs.len(), 1);
+            assert_eq!(collections.sha1_iocs.len(), 1);
+            assert_eq!(collections.sha256_iocs.len(), 1);
+        }
+
+        #[test]
+        fn test_organize_empty_iocs() {
+            let hash_iocs: Vec<HashIOC> = Vec::new();
+            let collections = organize_hash_iocs(hash_iocs, "test");
+
+            assert_eq!(collections.md5_iocs.len(), 0);
+            assert_eq!(collections.sha1_iocs.len(), 0);
+            assert_eq!(collections.sha256_iocs.len(), 0);
+        }
+
+        #[test]
+        fn test_organize_multiple_same_type() {
+            let hash_iocs = vec![
+                HashIOC {
+                    hash_type: HashType::Md5,
+                    hash_value: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(),
+                    description: "MD5 A".to_string(),
+                    score: 75,
+                },
+                HashIOC {
+                    hash_type: HashType::Md5,
+                    hash_value: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".to_string(),
+                    description: "MD5 B".to_string(),
+                    score: 80,
+                },
+            ];
+
+            let collections = organize_hash_iocs(hash_iocs, "test");
+
+            assert_eq!(collections.md5_iocs.len(), 2);
+            assert_eq!(collections.sha1_iocs.len(), 0);
+            assert_eq!(collections.sha256_iocs.len(), 0);
+            assert_eq!(collections.md5_iocs[0].hash_value, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+        }
+    }
+
+    mod filename_ioc_tests {
+        use super::*;
+
+        fn create_test_filename_iocs() -> Vec<FilenameIOC> {
+            vec![
+                FilenameIOC {
+                    pattern: r"mimikatz\.exe$".to_string(),
+                    regex: Regex::new(r"mimikatz\.exe$").unwrap(),
+                    regex_fp: None,
+                    description: "Mimikatz tool".to_string(),
+                    score: 90,
+                },
+                FilenameIOC {
+                    pattern: r".*\.ps1$".to_string(),
+                    regex: Regex::new(r".*\.ps1$").unwrap(),
+                    regex_fp: Some(Regex::new(r"legitimate\.ps1$").unwrap()),
+                    description: "PowerShell script".to_string(),
+                    score: 50,
+                },
+            ]
+        }
+
+        #[test]
+        fn test_filename_regex_match() {
+            let iocs = create_test_filename_iocs();
+            assert!(iocs[0].regex.is_match("/path/to/mimikatz.exe"));
+            assert!(!iocs[0].regex.is_match("/path/to/notepad.exe"));
+        }
+
+        #[test]
+        fn test_filename_with_false_positive() {
+            let iocs = create_test_filename_iocs();
+            assert!(iocs[1].regex.is_match("/path/to/script.ps1"));
+            assert!(iocs[1].regex.is_match("/path/to/legitimate.ps1"));
+            assert!(iocs[1].regex_fp.as_ref().unwrap().is_match("/path/to/legitimate.ps1"));
+            assert!(!iocs[1].regex_fp.as_ref().unwrap().is_match("/path/to/malicious.ps1"));
+        }
+    }
+
+    mod scan_config_tests {
+        use super::*;
+
+        #[test]
+        fn test_default_scan_config() {
+            let config = ScanConfig {
+                max_file_size: 10_000_000,
+                show_access_errors: false,
+                scan_all_types: false,
+                scan_all_drives: false,
+                alert_threshold: 80,
+                warning_threshold: 60,
+                notice_threshold: 40,
+                max_reasons: 2,
+                threads: 4,
+                cpu_limit: 100,
+            };
+
+            assert_eq!(config.max_file_size, 10_000_000);
+            assert!(!config.show_access_errors);
+            assert_eq!(config.alert_threshold, 80);
+            assert!(config.alert_threshold > config.warning_threshold);
+            assert!(config.warning_threshold > config.notice_threshold);
+        }
+
+        #[test]
+        fn test_threshold_ordering() {
+            let config = ScanConfig {
+                max_file_size: 10_000_000,
+                show_access_errors: false,
+                scan_all_types: false,
+                scan_all_drives: false,
+                alert_threshold: 80,
+                warning_threshold: 60,
+                notice_threshold: 40,
+                max_reasons: 2,
+                threads: 4,
+                cpu_limit: 100,
+            };
+
+            assert!(80 >= 60);
+            assert!(60 >= 40);
+            assert!(config.alert_threshold >= config.warning_threshold);
+            assert!(config.warning_threshold >= config.notice_threshold);
+        }
+    }
+
+    mod ext_vars_tests {
+        use super::*;
+
+        #[test]
+        fn test_ext_vars_creation() {
+            let ext_vars = ExtVars {
+                filename: "test.exe".to_string(),
+                filepath: "/path/to".to_string(),
+                filetype: "WINDOWS EXECUTABLE".to_string(),
+                extension: "exe".to_string(),
+                owner: "root".to_string(),
+            };
+
+            assert_eq!(ext_vars.filename, "test.exe");
+            assert_eq!(ext_vars.filepath, "/path/to");
+            assert_eq!(ext_vars.extension, "exe");
+        }
+    }
+
+    mod gen_match_tests {
+        use super::*;
+
+        #[test]
+        fn test_gen_match_creation() {
+            let m = GenMatch {
+                message: "Test match".to_string(),
+                score: 75,
+            };
+
+            assert_eq!(m.message, "Test match");
+            assert_eq!(m.score, 75);
+        }
+
+        #[test]
+        fn test_gen_match_sorting() {
+            let mut matches = vec![
+                GenMatch { message: "Low".to_string(), score: 40 },
+                GenMatch { message: "High".to_string(), score: 90 },
+                GenMatch { message: "Medium".to_string(), score: 60 },
+            ];
+
+            matches.sort_by(|a, b| b.score.cmp(&a.score));
+
+            assert_eq!(matches[0].score, 90);
+            assert_eq!(matches[1].score, 60);
+            assert_eq!(matches[2].score, 40);
+        }
+    }
+
+    mod yara_match_tests {
+        use super::*;
+
+        #[test]
+        fn test_yara_match_creation() {
+            let m = YaraMatch {
+                rulename: "TestRule".to_string(),
+                score: 80,
+                description: "A test rule".to_string(),
+                author: "Test Author".to_string(),
+                matched_strings: vec!["$s1: 'test' @ 0".to_string()],
+            };
+
+            assert_eq!(m.rulename, "TestRule");
+            assert_eq!(m.score, 80);
+            assert_eq!(m.matched_strings.len(), 1);
+        }
+
+        #[test]
+        fn test_yara_match_empty_metadata() {
+            let m = YaraMatch {
+                rulename: "MinimalRule".to_string(),
+                score: 75,
+                description: String::new(),
+                author: String::new(),
+                matched_strings: Vec::new(),
+            };
+
+            assert!(m.description.is_empty());
+            assert!(m.author.is_empty());
+            assert!(m.matched_strings.is_empty());
+        }
+    }
 }

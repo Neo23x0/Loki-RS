@@ -21,3 +21,4 @@ signatures/yara/faulty.yar
 dist/
 tmp/
 build/
+config/excludes.cfg

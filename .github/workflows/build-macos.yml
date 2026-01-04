@@ -14,50 +14,8 @@ jobs:
 
     runs-on: macos-latest
 
-    env:
-      CC: gcc
-      TARGET_PREFIX: /usr/local/x86_64-apple-darwin
-      CFLAGS: -I/usr/local/x86_64-apple-darwin/include
-      YARA_INCLUDE_DIR: /usr/local/x86_64-apple-darwin/include
-      LIBRARY_PATH: /usr/local/x86_64-apple-darwin/lib
-      PKG_CONFIG_PATH: /usr/local/x86_64-apple-darwin/lib/pkgconfig
-
     steps:
     - uses: actions/checkout@v3
 
-    - name: Install Dependencies
-      run: | 
-        brew install autoconf automake libtool make gcc pkg-config
-
-    - name: Install OpenSSL Dev
-      run: |
-        wget -nv -O openssl.tar.gz https://www.openssl.org/source/openssl-1.1.1p.tar.gz
-        mkdir openssl && cd openssl && tar --strip=1 -xzf ../openssl.tar.gz
-        ./config --prefix=$TARGET_PREFIX \
-            no-afalgeng \
-            no-async \
-            no-capieng \
-            no-dso \
-            no-shared \
-            no-sock \
-            no-ui
-        sudo gmake
-        sudo gmake install_sw
-
-    - name: Install YARA
-      run: |
-        wget -nv -O yara.tar.gz https://github.com/VirusTotal/yara/archive/v4.2.3.tar.gz
-        mkdir yara && cd yara && tar --strip=1 -xzf ../yara.tar.gz
-        ./bootstrap.sh
-        LDFLAGS="$(pkg-config --static --libs libcrypto)" ./configure \
-            --with-crypto \
-            --disable-shared \
-            --prefix=$TARGET_PREFIX
-        gmake
-        sudo gmake install
-
     - name: Build
       run: cargo build --verbose
-
-    #- name: Run tests
-    #  run: cargo test --verbose
