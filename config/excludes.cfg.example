@@ -1,0 +1,38 @@
+# LOKI2 Exclusions Configuration
+# 
+# This file contains regular expressions that are applied to file paths
+# during scanning. Each line represents a regex pattern that will exclude
+# matching paths from being scanned.
+#
+# Examples:
+#   ^/proc/.*          - Exclude everything under /proc
+#   ^/dev/.*           - Exclude everything under /dev
+#   ^/sys/.*           - Exclude everything under /sys
+#   .*\.log$           - Exclude all .log files
+#   .*/tmp/.*          - Exclude everything in tmp directories
+#   .*node_modules.*   - Exclude node_modules directories
+#
+# Note: Patterns are matched against the full file path, not just the filename.
+
+# System directories (Linux)
+^/proc/.*
+^/dev/.*
+^/sys/.*
+^/run/.*
+^/var/run/.*
+
+# Temporary files
+.*\.tmp$
+.*\.temp$
+.*\.swp$
+.*\.bak$
+
+# Log files (uncomment if you want to exclude logs)
+# .*\.log$
+# .*\.log\.[0-9]+$
+
+# Cache directories (uncomment if needed)
+# .*\.cache/.*
+# .*/cache/.*
+
+

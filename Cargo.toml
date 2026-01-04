@@ -3,6 +3,14 @@ name = "loki"
 version = "2.0.0"
 edition = "2021"
 
+[[bin]]
+name = "loki"
+path = "src/main.rs"
+
+[[bin]]
+name = "loki-util"
+path = "src/loki_util/main.rs"
+
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
@@ -22,9 +30,10 @@ sha2 = "0.10.*"
 hex = "0.4.*"
 memmap = "0.7.*"
 chrono = "*"
-
-[target.'cfg(unix)'.dependencies]
-yara = { version="*" }
-
-[target.'cfg(windows)'.dependencies]
-yara = { version="*", features=["bundled-4_2_3"] }
+regex = "1.*"
+yara-x = "1.10.0"
+reqwest = { version = "0.11", features = ["blocking"] }
+zip = "0.6"
+flate2 = "1.0"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"

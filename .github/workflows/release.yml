@@ -1,0 +1,210 @@
+name: Release Build
+
+on:
+  push:
+    tags:
+      - 'v*'  # Triggers on tags like v2.0.0, v2.1.0, etc.
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: Build ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Linux x86_64
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            artifact_name: loki-linux-x86_64
+            binary_name: loki
+            archive_format: tar.gz
+          
+          # Linux ARM64
+          - os: ubuntu-latest
+            target: aarch64-unknown-linux-gnu
+            artifact_name: loki-linux-aarch64
+            binary_name: loki
+            archive_format: tar.gz
+          
+          # Windows x86_64
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            artifact_name: loki-windows-x86_64
+            binary_name: loki.exe
+            archive_format: zip
+          
+          # macOS x86_64
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            artifact_name: loki-macos-x86_64
+            binary_name: loki
+            archive_format: tar.gz
+          
+          # macOS ARM64 (Apple Silicon)
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            artifact_name: loki-macos-aarch64
+            binary_name: loki
+            archive_format: tar.gz
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Cache Cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-cargo-${{ matrix.target }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-${{ matrix.target }}-
+
+      - name: Install cross-compilation dependencies (Linux ARM64)
+        if: matrix.target == 'aarch64-unknown-linux-gnu'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu
+
+      - name: Configure Cargo for cross-compilation (Linux ARM64)
+        if: matrix.target == 'aarch64-unknown-linux-gnu'
+        run: |
+          mkdir -p .cargo
+          echo '[target.aarch64-unknown-linux-gnu]' >> .cargo/config.toml
+          echo 'linker = "aarch64-linux-gnu-gcc"' >> .cargo/config.toml
+
+      - name: Build release binary
+        run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Strip binary (Linux/macOS)
+        if: runner.os != 'Windows'
+        run: |
+          strip target/${{ matrix.target }}/release/${{ matrix.binary_name }}
+
+      - name: Create release archive
+        shell: bash
+        run: |
+          VERSION=${GITHUB_REF#refs/tags/}
+          ARCHIVE_NAME="${{ matrix.artifact_name }}-${VERSION}.${{ matrix.archive_format }}"
+          
+          if [ "${{ matrix.archive_format }}" = "tar.gz" ]; then
+            tar czf "${ARCHIVE_NAME}" -C target/${{ matrix.target }}/release ${{ matrix.binary_name }}
+          else
+            cd target/${{ matrix.target }}/release
+            zip -r "../../../${ARCHIVE_NAME}" ${{ matrix.binary_name }}
+            cd ../../..
+          fi
+          
+          echo "ARCHIVE_NAME=${ARCHIVE_NAME}" >> $GITHUB_ENV
+          echo "BINARY_NAME=${{ matrix.binary_name }}" >> $GITHUB_ENV
+
+      - name: Generate checksums (Linux/macOS)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          sha256sum "${ARCHIVE_NAME}" > "${ARCHIVE_NAME}.sha256"
+          echo "CHECKSUM_FILE=${ARCHIVE_NAME}.sha256" >> $GITHUB_ENV
+
+      - name: Generate checksums (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $hash = Get-FileHash -Path "${ARCHIVE_NAME}" -Algorithm SHA256
+          $hash.Hash | Out-File -FilePath "${ARCHIVE_NAME}.sha256" -Encoding ASCII
+          echo "CHECKSUM_FILE=${ARCHIVE_NAME}.sha256" >> $env:GITHUB_ENV
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: |
+            ${{ env.ARCHIVE_NAME }}
+            ${{ env.CHECKSUM_FILE }}
+
+  release:
+    name: Create Release
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Extract version from tag
+        id: version
+        run: |
+          VERSION=${GITHUB_REF#refs/tags/}
+          echo "VERSION=${VERSION}" >> $GITHUB_OUTPUT
+          echo "Tag version: ${VERSION}"
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          name: Release ${{ steps.version.outputs.VERSION }}
+          body: |
+            ## Loki2 ${{ steps.version.outputs.VERSION }}
+            
+            ### Downloads
+            
+            **Linux (x86_64)**
+            - Binary: `loki-linux-x86_64-${{ steps.version.outputs.VERSION }}.tar.gz`
+            - Checksum: `loki-linux-x86_64-${{ steps.version.outputs.VERSION }}.tar.gz.sha256`
+            
+            **Linux (ARM64)**
+            - Binary: `loki-linux-aarch64-${{ steps.version.outputs.VERSION }}.tar.gz`
+            - Checksum: `loki-linux-aarch64-${{ steps.version.outputs.VERSION }}.tar.gz.sha256`
+            
+            **Windows (x86_64)**
+            - Binary: `loki-windows-x86_64-${{ steps.version.outputs.VERSION }}.zip`
+            - Checksum: `loki-windows-x86_64-${{ steps.version.outputs.VERSION }}.zip.sha256`
+            
+            **macOS (x86_64)**
+            - Binary: `loki-macos-x86_64-${{ steps.version.outputs.VERSION }}.tar.gz`
+            - Checksum: `loki-macos-x86_64-${{ steps.version.outputs.VERSION }}.tar.gz.sha256`
+            
+            **macOS (ARM64/Apple Silicon)**
+            - Binary: `loki-macos-aarch64-${{ steps.version.outputs.VERSION }}.tar.gz`
+            - Checksum: `loki-macos-aarch64-${{ steps.version.outputs.VERSION }}.tar.gz.sha256`
+            
+            ### Installation
+            
+            1. Download the appropriate binary for your platform
+            2. Extract the archive
+            3. Make binary executable (Linux/macOS): `chmod +x loki`
+            4. Run: `./loki --help`
+            
+            ### Signature Base
+            
+            You'll need to link or clone the signature-base repository:
+            ```bash
+            git clone https://github.com/Neo23x0/signature-base.git signatures
+            ```
+          files: |
+            artifacts/**/*
+          draft: false
+          prerelease: ${{ contains(steps.version.outputs.VERSION, '-') }}
+          tag_name: ${{ steps.version.outputs.VERSION }}
+
+
