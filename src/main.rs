@@ -780,7 +780,7 @@ fn welcome_message() {
     println!("  Simple IOC and YARA Scanner                                           ");
     println!(" ");
     println!("  Version {} (Rust)                                            ", VERSION);
-    println!("  Florian Roth 2025                                                     ");
+    println!("  Florian Roth 2026                                                     ");
     println!(" ");
     println!("------------------------------------------------------------------------");                      
 }
