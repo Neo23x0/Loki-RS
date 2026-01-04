@@ -169,7 +169,7 @@ install-signatures: ## Install or link signature-base to build directory
 	fi
 	@echo "[+] Signatures setup complete"
 
-dist: build ## Create distribution package (downloads signatures from GitHub)
+dist: build fetch-signatures ## Create distribution package (downloads signatures from GitHub)
 	@echo "[+] Creating distribution package ..."
 	@mkdir -p ./dist/loki/signatures
 	@mkdir -p ./tmp
@@ -188,30 +188,9 @@ dist: build ## Create distribution package (downloads signatures from GitHub)
 		chmod +x ./dist/loki/loki-util; \
 		echo "[+] Copied loki-util binary"; \
 	fi
-	@echo "[+] Downloading signature-base from GitHub ..."
-	@if command -v wget >/dev/null 2>&1; then \
-		wget -q https://github.com/Neo23x0/signature-base/archive/master.tar.gz -O ./tmp/signature-base.tar.gz && \
-		tar -xzf ./tmp/signature-base.tar.gz -C ./tmp 2>/dev/null && \
-		cp -r ./tmp/signature-base-master/yara ./dist/loki/signatures/ 2>/dev/null || true && \
-		cp -r ./tmp/signature-base-master/iocs ./dist/loki/signatures/ 2>/dev/null || true; \
-	elif command -v curl >/dev/null 2>&1; then \
-		curl -sL https://github.com/Neo23x0/signature-base/archive/master.tar.gz -o ./tmp/signature-base.tar.gz && \
-		tar -xzf ./tmp/signature-base.tar.gz -C ./tmp 2>/dev/null && \
-		cp -r ./tmp/signature-base-master/yara ./dist/loki/signatures/ 2>/dev/null || true && \
-		cp -r ./tmp/signature-base-master/iocs ./dist/loki/signatures/ 2>/dev/null || true; \
-	else \
-		echo "[!] Neither wget nor curl found. Please install signatures manually."; \
-	fi
-	@echo "[+] Downloading YARA rules from yara-forge ..."
-	@if command -v wget >/dev/null 2>&1; then \
-		wget -q https://github.com/YARAHQ/yara-forge/releases/latest/download/yara-forge-rules-core.zip -O ./tmp/yara-forge-rules-core.zip && \
-		unzip -q -o ./tmp/yara-forge-rules-core.zip -d ./tmp/yara-forge 2>/dev/null || true && \
-		find ./tmp/yara-forge -name "*.yar" -exec cp {} ./dist/loki/signatures/yara/ \; 2>/dev/null || true; \
-	elif command -v curl >/dev/null 2>&1; then \
-		curl -sL https://github.com/YARAHQ/yara-forge/releases/latest/download/yara-forge-rules-core.zip -o ./tmp/yara-forge-rules-core.zip && \
-		unzip -q -o ./tmp/yara-forge-rules-core.zip -d ./tmp/yara-forge 2>/dev/null || true && \
-		find ./tmp/yara-forge -name "*.yar" -exec cp {} ./dist/loki/signatures/yara/ \; 2>/dev/null || true; \
-	fi
+	@echo "[+] Copying signatures to ./dist/loki/signatures ..."
+	@cp -r ./signatures/yara ./dist/loki/signatures/ 2>/dev/null || true
+	@cp -r ./signatures/iocs ./dist/loki/signatures/ 2>/dev/null || true
 	@echo "[+] Copying documentation ..."
 	@cp LICENSE ./dist/loki/ 2>/dev/null || true
 	@cp README.md ./dist/loki/ 2>/dev/null || true

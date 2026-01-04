@@ -2,7 +2,7 @@
 
 This document provides a feature-by-feature comparison between Loki v1 and Loki-RS, identifying gaps, bugs, and implementation plans.
 
-**Last Updated**: Based on comprehensive analysis
+**Last Updated**: 2026-01-04
 **Loki v1 Version**: 0.51.1
 **Loki-RS Version**: 2.0.1-alpha
 
@@ -67,7 +67,7 @@ This document provides a feature-by-feature comparison between Loki v1 and Loki-
 | **Intense Mode (`--intense`)** | Scan unknown file types | ⚠️ Partial | `--scan-all-files` similar but not identical | P2 | Align with v1 behavior | Test intense mode |
 | **Force (`--force`)** | Override exclusions | ❌ Missing | No override option | P2 | Add force flag | Test exclusion override |
 | **Version (`--version`)** | Show version and exit | ✅ Implemented | `--version` flag shows version and exits | ✅ | ✅ Complete | Test version display |
-| **Update (`--update`)** | Update signatures | ❌ Missing | No update mechanism | P2 | Add git-based update | Test signature update |
+| **Update (`--update`)** | Update signatures | ⚠️ Partial | `loki-util` implements update, but main binary does not have `--update` flag | P2 | Encourage `loki-util` usage | Test signature update |
 | **Help (`-h/--help`)** | Show help | ✅ Implemented | Works via rustop | ✅ | - | - |
 
 ---
@@ -80,7 +80,7 @@ This document provides a feature-by-feature comparison between Loki v1 and Loki-
 | **Windows Drive Handling** | `--allhds`, `--alldrives` options | ❌ Missing | No Windows-specific drive handling | P2 | Add Windows drive enumeration | Test on Windows |
 | **User Excludes Config** | `config/excludes.cfg` regex patterns | ❌ Missing | No config file support | P1 | Load and apply excludes.cfg | Test with exclude patterns |
 | **Program Directory Skip** | Skips Loki's own directory | ❌ Missing | May scan own directory | P1 | Detect and skip program directory | Test with Loki-RS in scan path |
-| **Mounted Devices** | Excludes `/media`, `/volumes` | ⚠️ Partial | Only excludes `/Volumes/` | P1 | Add `/media` exclusion | Test with mounted drives |
+| **Mounted Devices** | Excludes `/media`, `/volumes` | ✅ Implemented | Excludes `/media` and `/Volumes` | ✅ | ✅ Complete | Test with mounted drives |
 | **Network Drives** | Excludes network drives (unless `--alldrives`) | ❌ Missing | No network drive detection | P2 | Detect and exclude network drives | Test with network mounts |
 
 ---
@@ -108,7 +108,7 @@ This document provides a feature-by-feature comparison between Loki v1 and Loki-
 | **Process Scan Error Handling** | Logs and continues | ✅ Implemented | Handles errors gracefully | ✅ | ✅ Complete | - |
 | **Exit Codes** | 0 for success, 1 for errors | ✅ Implemented | Exit 0 for success (no matches), exit 1 for fatal errors, exit 2 for partial success (matches found) | ✅ | ✅ Complete | Test exit code scenarios |
 | **Signal Handling (CTRL+C)** | Catches SIGINT, exits gracefully | ❌ Missing | No signal handling | P1 | Add signal handler | Test CTRL+C handling |
-| **Argument Validation** | Validates conflicting flags | ❌ Missing | No validation | P1 | Add argument validation | Test invalid flag combinations |
+| **Argument Validation** | Validates conflicting flags | ⚠️ Partial | Validates score thresholds (alert > warning > notice) | P1 | Add more argument validation | Test invalid flag combinations |
 
 ---
 
@@ -143,7 +143,7 @@ This document provides a feature-by-feature comparison between Loki v1 and Loki-
 
 | Feature | Loki v1 Behavior | Loki-RS Status | Gap / Bug Description | Priority | Plan | Test Plan |
 |---------|------------------|--------------|----------------------|----------|------|-----------|
-| **Hash Binary Search** | Sorted lists + binary search | ❌ Missing | Linear search | P1 | Implement binary search | Test with large hash sets |
+| **Hash Binary Search** | Sorted lists + binary search | ✅ Implemented | Hashes are sorted by type and value, using `binary_search_by` | ✅ | ✅ Complete | Test with large hash sets |
 | **File Magic Caching** | Caches max signature length | ❌ Missing | No magic file support | P2 | If adding magic file, cache length | - |
 | **YARA Rule Reuse** | Compiled once, reused | ✅ Implemented | Works correctly | ✅ | - | - |
 
@@ -153,14 +153,13 @@ This document provides a feature-by-feature comparison between Loki v1 and Loki-
 
 These features must be implemented for v1 parity:
 
-1. **Filename IOC Matching** - Core detection feature, currently TODO
-2. **Hash Score Parsing** - Currently hardcoded to 100, should default to 75, support 3-column format
-3. **Score Thresholds** - Essential for proper alerting (default: 80 alert, 60 warning, 40 notice)
-4. **Score Calculation** - Use weighted formula (not simple addition) - see formula below
-5. **Exit Codes** - Follow common standards (0 success, non-zero errors)
-6. **Error Handling** - Robust recovery - continue scanning even if individual checks fail
-7. **Linux Path Exclusions** - Exclude system directories on Linux
-8. **YARA Metadata Extraction** - Extract description, author, score, and string matches (hex for non-ASCII)
+1. **Error Handling** - Robust recovery - continue scanning even if individual checks fail (Completed)
+2. **Hash Score Parsing** - Default score: 75, support 2/3 columns (Completed)
+3. **Score Thresholds** - Alert/Warning/Notice configuration (Completed)
+4. **Score Calculation** - Weighted score formula (Completed)
+5. **Exit Codes** - Follow common standards (Completed)
+6. **Linux Path Exclusions** - Exclude system directories on Linux (Completed)
+7. **YARA Metadata Extraction** - Extract info from rules (Completed)
 
 ---
 
@@ -168,14 +167,12 @@ These features must be implemented for v1 parity:
 
 Important for usability but not blockers:
 
-1. **Hash Binary Search** - Performance issue with large IOC sets
-2. **False Positive Hash Support** - Important for accuracy
-3. **User Excludes Config** - Common user need
-4. **C2 IOC Matching** - Core detection feature
-5. **YARA Memory Rules** - Filter process scanning rules
+1. **User Excludes Config** - Load `config/excludes.cfg`
+2. **Filename IOC Environment Vars** - Resolve `%SystemRoot%` etc.
+3. **YARA Memory Rules** - Filter process scanning rules
+4. **Signal Handling** - Handle CTRL+C gracefully
+5. **Log File Timestamp** - Add timestamp to log filename
 6. **Process Working Set Limit** - Stability for large processes
-7. **Result Summary** - User feedback
-8. **Alert/Warning/Notice Counters** - User feedback
 
 ---
 
@@ -192,175 +189,4 @@ These features can be skipped or have better alternatives:
 7. **Levenshtein Distance** - Low priority, can defer
 8. **Progress Indicator** - Nice to have, can defer
 9. **Syslog Support** - Low usage, can defer to P3
-
----
-
-## Score Calculation Formula
-
-**Important**: Loki-RS will use a **weighted score calculation** instead of simple addition. This is a divergence from Loki v1 but provides better scoring.
-
-### Formula
-
-Given sub-scores (s₀, s₁, s₂, ...) ordered in descending order, the total score is calculated as:
-
-```
-score = 100 * (1 - (1 - s₀/100/2⁰) * (1 - s₁/100/2¹) * (1 - s₂/100/2²) * ...)
-```
-
-### Properties
-
-- **Maximum score**: Always capped at 100
-- **Weighting**: Higher scores weighted more heavily
-- **Multiple matches**: Lower scores contribute less to total
-- **Ordering**: Sub-scores must be sorted descending before calculation
-
-### Example
-
-Python calculation with 5 sub-scores (none exceeding 75):
-
-```python
-subscore0 = 1 - 70 / 100 / pow(2, 0)  # = 0.3
-subscore1 = 1 - 70 / 100 / pow(2, 1)  # = 0.65
-subscore2 = 1 - 50 / 100 / pow(2, 2)  # = 0.875
-subscore3 = 1 - 40 / 100 / pow(2, 3)  # = 0.95
-subscore4 = 1 - 40 / 100 / pow(2, 4)  # = 0.975
-score = 100 * (1 - (0.3 * 0.65 * 0.875 * 0.95 * 0.975))
-# score = 84.195859375
-```
-
-### Implementation Notes
-
-- Sub-scores are called "reasons" in the output
-- Only positive scores are included
-- Top N reasons shown (default: 2, configurable via `--max-reasons`)
-- Each reason shows its sub-score
-- Total score is the calculated weighted score
-
-### Default Thresholds
-
-- **Alert**: ≥ 80
-- **Warning**: ≥ 60
-- **Notice**: ≥ 40
-
----
-
-## Implementation Notes
-
-### Better Approaches in Loki-RS
-
-Some features in Loki-RS may be implemented differently (and better) than v1:
-
-1. **File Format Detection**: Using `file-format` crate instead of custom magic file - **Keep this approach**
-2. **Process Enumeration**: Using `sysinfo` (cross-platform) instead of WMI - **Keep this approach**
-3. **Logging**: Using `flexi_logger` instead of custom logger - **Keep but enhance**
-4. **CLI Parsing**: Using `rustop` instead of argparse - **Keep this approach**
-
-### Divergences from v1 (Intentional)
-
-1. **Score Calculation**: v1 uses simple addition, v2 uses weighted formula - **Better approach, caps at 100**
-2. **Hash Default Score**: v1 uses 100, v2 uses 75 - **More conservative default**
-
-### Divergences to Fix
-
-1. **Symlink Following**: v1 doesn't follow, v2 does - **Should match v1**
-2. **File Size Units**: v1 uses KB, v2 uses bytes - **Add KB option, keep bytes**
-3. **Log File Naming**: v1 has timestamp, v2 doesn't - **Add timestamp**
-4. **Hash Search**: v1 uses binary search, v2 linear - **Should optimize**
-
----
-
-## Test Strategy
-
-### Unit Tests Needed
-
-1. Hash IOC parsing (2 and 3 column formats)
-2. Filename IOC regex compilation and matching
-3. Score threshold filtering
-4. YARA metadata extraction
-5. Exit code scenarios
-
-### Integration Tests Needed
-
-1. End-to-end scan with sample files
-2. IOC file loading and matching
-3. YARA rule compilation and scanning
-4. Error handling with invalid inputs
-5. Platform-specific path exclusions
-
-### Golden Tests (v1 vs v2)
-
-1. Run both on same test dataset
-2. Compare detected hits count
-3. Compare output formats
-4. Compare exit codes
-5. Compare performance
-
----
-
-## Next Steps
-
-### Phase 1: Critical Fixes (P0)
-
-1. **Error Handling**:
-   - Replace all `expect()` and `unwrap()` with Result handling
-   - Ensure scanner continues even if individual checks fail
-   - Log errors but don't panic
-
-2. **Hash Score Parsing**:
-   - Default score: 75 (not 100)
-   - Support 2-column format: `hash;description` (score = 75)
-   - Support 3-column format: `hash;score;description` (use provided score)
-   - Handle integer parsing errors gracefully
-
-3. **Score Calculation**:
-   - Implement weighted score formula
-   - Sort sub-scores descending
-   - Calculate total score using formula
-   - Display sub-scores as "reasons"
-
-4. **Score Thresholds**:
-   - Default: Alert ≥ 80, Warning ≥ 60, Notice ≥ 40
-   - Add CLI flags: `-a`, `-w`, `-n` (configurable)
-   - Filter output by threshold
-   - Add `--max-reasons` flag (default: 2)
-
-5. **Exit Codes**:
-   - 0: Success (scan completed)
-   - 1: Error (invalid arguments, missing signatures, fatal errors)
-   - 2: Partial success (some errors but scan continued)
-   - Consider: Signal handling (CTRL+C) → exit 0
-
-6. **Filename IOC Matching**:
-   - Compile regex patterns
-   - Match against full file path
-   - Handle false positive regex (3rd column)
-   - Apply environment variable replacement
-
-7. **Linux Path Exclusions**:
-   - Exclude: `/proc`, `/dev`, `/sys/kernel/debug`, `/sys/kernel/slab`, `/sys/devices`, `/usr/src/linux`
-   - Exclude: `/media`, `/volumes` (unless `--scan-all-drives`)
-   - Exclude: `/initctl` (end of path)
-
-8. **YARA Metadata Extraction**:
-   - Extract: `description`, `author`, `score` from rule metadata
-   - Extract matched strings with offsets
-   - Hex-encode non-ASCII strings
-   - Display in match output
-
-### Phase 2: Core Features (P1)
-
-1. **Hash Binary Search**: Optimize for large IOC sets
-2. **False Positive Hash Support**: Load and check before matching
-3. **User Excludes Config**: Load `config/excludes.cfg`
-4. **C2 IOC Matching**: Load and match process connections
-5. **Result Summary**: Final counts and recommendations
-6. **Counters**: Track alerts/warnings/notices
-
-### Phase 3: Enhancements (P2-P3)
-
-1. **CLI Flags**: Add missing flags (`-l`, `--logfolder`, `--nolog`, etc.)
-2. **Output Formatting**: Enhanced console output
-3. **Log File**: Add timestamp to filename
-4. **Progress Indicator**: File count display
-5. **Platform Features**: Windows drive handling, admin checks
 

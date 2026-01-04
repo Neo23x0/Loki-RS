@@ -1,4 +1,3 @@
-use std::fs::File;
 use std::{fs};
 use std::time::{UNIX_EPOCH};
 use arrayvec::ArrayVec;
@@ -8,10 +7,9 @@ use chrono::offset::Utc;
 use chrono::prelude::*;
 use sha2::{Sha256, Digest};
 use sha1::*;
-use memmap::MmapOptions;
+use memmap2::MmapOptions;
 use walkdir::WalkDir;
 use yara_x::{Scanner, Rules};
-use std::io::Read;
 
 use crate::{ScanConfig, GenMatch, HashIOCCollections, FalsePositiveHashCollections, ExtVars, YaraMatch, FilenameIOC, find_hash_ioc};
 use crate::helpers::score::calculate_weighted_score;
@@ -171,9 +169,9 @@ pub fn scan_path (
             Ok(realsize) => realsize,
             Err(e) => { if scan_config.show_access_errors { log::error!("Cannot access file FILE: {:?} ERROR: {:?}", entry.path(), e) }; continue; }
         };
-        if realsize > scan_config.max_file_size as u64 { 
-            log::trace!("Skipping file due to size FILE: {} SIZE: {} MAX_FILE_SIZE: {}", 
-            entry.path().display(), realsize, scan_config.max_file_size);
+        if realsize > scan_config.max_file_size as u64 || metadata.len() > scan_config.max_file_size as u64 { 
+            log::trace!("Skipping file due to size FILE: {} SIZE: {} LOGICAL_SIZE: {} MAX_FILE_SIZE: {}", 
+            entry.path().display(), realsize, metadata.len(), scan_config.max_file_size);
             continue; 
         }
         // Skip certain file types
@@ -247,7 +245,7 @@ pub fn scan_path (
                 continue; // skip the rest of the analysis 
             }
         };
-        let mmap = match unsafe { MmapOptions::new().map(&file_handle) } {
+        let mmap = match unsafe { MmapOptions::new().map(file_handle) } {
             Ok(m) => m,
             Err(e) => {
                 if scan_config.show_access_errors {
@@ -379,7 +377,7 @@ pub fn scan_path (
         log::trace!("Passing external variables to the scan EXT_VARS: {:?}", ext_vars);
         // Actual scanning and result analysis
         let yara_matches = 
-            scan_file(&compiled_rules, &file_handle, scan_config, &ext_vars);
+            scan_file(&compiled_rules, &mmap, scan_config, &ext_vars);
         for ymatch in yara_matches.iter() {
             if !sample_matches.is_full() {
                 // Build match message with metadata
@@ -500,7 +498,7 @@ pub fn scan_path (
 }
 
 // scan a file
-fn scan_file(rules: &Rules, file_handle: &File, scan_config: &ScanConfig, ext_vars: &ExtVars) -> ArrayVec<YaraMatch, 100> {
+fn scan_file(rules: &Rules, file_content: &[u8], scan_config: &ScanConfig, ext_vars: &ExtVars) -> ArrayVec<YaraMatch, 100> {
     // YARA-X: Create scanner from rules
     let mut scanner = Scanner::new(rules);
     
@@ -525,20 +523,8 @@ fn scan_file(rules: &Rules, file_handle: &File, scan_config: &ScanConfig, ext_va
         log::debug!("Error setting owner global: {:?}", e);
     }
     
-    // Read file content
-    let mut file_content = Vec::new();
-    let read_result = file_handle.try_clone().and_then(|mut f| f.read_to_end(&mut file_content));
-    
-    // Scan file
-    let results = match read_result {
-        Ok(_) => scanner.scan(&file_content),
-        Err(e) => {
-            if scan_config.show_access_errors {
-                log::error!("Cannot read file for scanning ERROR: {:?}", e);
-            }
-            return ArrayVec::new();
-        }
-    };
+    // Scan file content directly (already in memory/mmap)
+    let results = scanner.scan(file_content);
     
     // Handle scan results
     let mut yara_matches = ArrayVec::<YaraMatch, 100>::new();

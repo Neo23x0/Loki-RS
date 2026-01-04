@@ -4,6 +4,7 @@ mod modules;
 use std::fs;
 use rustop::opts;
 use flexi_logger::*;
+use colored::Colorize;
 use arrayvec::ArrayVec;
 use csv::ReaderBuilder;
 
@@ -300,7 +301,7 @@ fn initialize_false_positive_hash_iocs() -> Vec<HashIOC> {
 }
 
 // Organize hash IOCs by type for efficient binary search
-fn organize_hash_iocs(hash_iocs: Vec<HashIOC>) -> HashIOCCollections {
+fn organize_hash_iocs(hash_iocs: Vec<HashIOC>, label: &str) -> HashIOCCollections {
     let mut md5_iocs = Vec::new();
     let mut sha1_iocs = Vec::new();
     let mut sha256_iocs = Vec::new();
@@ -319,8 +320,8 @@ fn organize_hash_iocs(hash_iocs: Vec<HashIOC>) -> HashIOCCollections {
     sha1_iocs.sort_by(|a, b| a.hash_value.cmp(&b.hash_value));
     sha256_iocs.sort_by(|a, b| a.hash_value.cmp(&b.hash_value));
     
-    log::info!("Organized hash IOCs - MD5: {} SHA1: {} SHA256: {}", 
-        md5_iocs.len(), sha1_iocs.len(), sha256_iocs.len());
+    log::info!("Organized {} - MD5: {} SHA1: {} SHA256: {}", 
+        label, md5_iocs.len(), sha1_iocs.len(), sha256_iocs.len());
     
     HashIOCCollections {
         md5_iocs,
@@ -721,12 +722,38 @@ fn log_cmdline_format(
     record: &Record,
 ) -> Result<(), std::io::Error> {
     let level = record.level();
-    write!(
-        w,
-        "[{}] {}",
-        style(level).paint(level.to_string()),
-        record.args().to_string()
-    )
+    let msg = record.args().to_string();
+    
+    // Determine color based on level and message content
+    // Standard (Green) -> Info (not starting with NOTICE)
+    // Notice (Light Blue) -> Info (starting with NOTICE)
+    // Warnings (Yellow) -> Warn
+    // Alerts (Red) -> Error (starting with ALERT)
+    // Errors (Purple) -> Error (not starting with ALERT)
+    
+    let colored_msg = match level {
+        log::Level::Error => {
+            if msg.starts_with("ALERT") {
+                format!("[{}] {}", level, msg).red()
+            } else {
+                format!("[{}] {}", level, msg).purple()
+            }
+        },
+        log::Level::Warn => {
+            format!("[{}] {}", level, msg).yellow()
+        },
+        log::Level::Info => {
+            if msg.starts_with("NOTICE") {
+                format!("[{}] {}", level, msg).bright_cyan()
+            } else {
+                format!("[{}] {}", level, msg).green()
+            }
+        },
+        log::Level::Debug => format!("[{}] {}", level, msg).white(),
+        log::Level::Trace => format!("[{}] {}", level, msg).white().dimmed(),
+    };
+    
+    write!(w, "{}", colored_msg)
 }
 
 // Welcome message
@@ -853,10 +880,10 @@ fn main() {
     // Initialize IOCs 
     log::info!("Initialize hash IOCs ...");
     let hash_iocs = initialize_hash_iocs();
-    let hash_collections = organize_hash_iocs(hash_iocs);
+    let hash_collections = organize_hash_iocs(hash_iocs, "hash IOCs");
     log::info!("Initialize false positive hash IOCs ...");
     let fp_hash_iocs = initialize_false_positive_hash_iocs();
-    let fp_hash_collections = organize_hash_iocs(fp_hash_iocs);
+    let fp_hash_collections = organize_hash_iocs(fp_hash_iocs, "false positive hash IOCs");
     log::info!("Initialize filename IOCs ...");
     let filename_iocs = initialize_filename_iocs();
     log::info!("Initialize C2 IOCs ...");

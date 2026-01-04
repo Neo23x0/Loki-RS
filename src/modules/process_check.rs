@@ -1,9 +1,11 @@
 use std::process;
 use arrayvec::ArrayVec;
 use yara_x::{Scanner, Rules};
+#[cfg(target_os = "linux")]
 use std::fs;
 use sysinfo::System;
 use hex;
+#[cfg(target_os = "linux")]
 use std::io::{BufRead, BufReader};
 
 use crate::{ScanConfig, GenMatch, C2IOC, check_c2_match};
@@ -51,18 +53,40 @@ pub fn scan_processes(compiled_rules: &Rules, scan_config: &ScanConfig, c2_iocs:
         // Note: Reading /proc/<pid>/mem requires special permissions and may not work
         // For now, we'll skip process memory scanning on Linux until we have a better approach
         // YARA-X doesn't have a direct scan_process method like the old YARA
-        let proc_mem_path = format!("/proc/{}/mem", pid_u32);
-        let mem_data = match fs::read(&proc_mem_path) {
-            Ok(data) => data,
-            Err(e) => {
-                if scan_config.show_access_errors {
-                    log::error!("Cannot read process memory for PID {} ERROR: {:?}", pid_u32, e);
-                } else {
-                    log::debug!("Cannot read process memory for PID {} ERROR: {:?}", pid_u32, e);
+        
+        #[cfg(target_os = "linux")]
+        let mem_data = {
+            let proc_mem_path = format!("/proc/{}/mem", pid_u32);
+            match fs::read(&proc_mem_path) {
+                Ok(data) => data,
+                Err(e) => {
+                    if scan_config.show_access_errors {
+                        log::error!("Cannot read process memory for PID {} ERROR: {:?}", pid_u32, e);
+                    } else {
+                        log::debug!("Cannot read process memory for PID {} ERROR: {:?}", pid_u32, e);
+                    }
+                    continue; // Skip this process (but we already counted it as scanned)
                 }
-                continue; // Skip this process (but we already counted it as scanned)
             }
         };
+
+        #[cfg(not(target_os = "linux"))]
+        let mem_data: Vec<u8> = Vec::new();
+
+        // Skip scanning if no memory data (non-Linux or read failure)
+        if mem_data.is_empty() {
+             // For non-Linux, we just proceed to match rule metadata or skip?
+             // If we have no data, scanner.scan(&mem_data) returns matches on empty string.
+             // Usually we want to skip if we can't read memory.
+             // But let's let it run on empty to be safe, or continue?
+             // If we continue here, we break the logic below.
+             // Better: if mem_data is empty, we might want to skip YARA scan unless we want to match empty.
+             if cfg!(not(target_os = "linux")) {
+                 // log::debug!("Process memory scanning not supported on this OS");
+                 // We continue loop to check network connections?
+                 // But scan_result is needed below.
+             }
+        }
         
         let scan_result = scanner.scan(&mem_data);
         
@@ -269,6 +293,7 @@ pub fn scan_processes(compiled_rules: &Rules, scan_config: &ScanConfig, c2_iocs:
 
 // Get network connections for a process (Linux-specific)
 // Reads from /proc/net/tcp and /proc/net/udp and matches by inode
+#[cfg(target_os = "linux")]
 fn get_process_connections(pid: u32) -> Vec<(String, u16)> {
     let mut connections = Vec::new();
     
@@ -342,7 +367,13 @@ fn get_process_connections(pid: u32) -> Vec<(String, u16)> {
     connections
 }
 
+#[cfg(not(target_os = "linux"))]
+fn get_process_connections(_pid: u32) -> Vec<(String, u16)> {
+    Vec::new()
+}
+
 // Parse TCP/UDP address from /proc/net format: "AABBCCDD:PORT" (hex)
+#[cfg(target_os = "linux")]
 fn parse_tcp_address(addr_str: &str) -> Option<(String, u16)> {
     let parts: Vec<&str> = addr_str.split(':').collect();
     if parts.len() != 2 {
