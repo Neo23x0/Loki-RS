@@ -50,7 +50,7 @@ python loki.py --help
 - Core class: `Loki` class (line 97)
 - Logger: `LokiLogger` from `lib/lokilogger.py`
 
-## How to Run Loki2 (Rust)
+## How to Run Loki-RS (Rust)
 
 ### Prerequisites
 - Rust toolchain (cargo, rustc)
@@ -58,7 +58,7 @@ python loki.py --help
 
 ### Setup
 ```bash
-cd Loki2
+cd Loki-RS
 
 # Link signature-base (if available)
 # git clone https://github.com/Neo23x0/signature-base ../signature-base/
@@ -105,7 +105,7 @@ cargo build --release
 
 ## Build Status
 
-### Loki2 Compilation
+### Loki-RS Compilation
 - ✅ **Status**: Builds successfully
 - ⚠️ **Warnings**: 5 warnings (mostly unused variables, deprecated chrono methods)
 - ✅ **Dependencies**: All resolved
@@ -124,7 +124,7 @@ cargo build --release
 ## Test Status
 
 ### Existing Tests
-- ❌ No test files found in Loki2
+- ❌ No test files found in Loki-RS
 - ⚠️ No test infrastructure detected
 
 ### Runtime Testing

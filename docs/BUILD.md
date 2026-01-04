@@ -1,6 +1,6 @@
-# Loki2 Build Guide
+# Loki-RS Build Guide
 
-This guide provides step-by-step instructions for building Loki2 on different platforms.
+This guide provides step-by-step instructions for building Loki-RS on different platforms.
 
 ## Table of Contents
 
@@ -57,8 +57,8 @@ cargo install cargo-audit
 
 1. **Clone the Repository**
    ```bash
-   git clone https://github.com/yourusername/Loki2.git
-   cd Loki2
+   git clone https://github.com/Neo23x0/Loki-RS.git
+   cd Loki-RS
    ```
 
 2. **Link Signature Base** (if available)
@@ -200,8 +200,8 @@ cargo build --release --target aarch64-unknown-linux-gnu
 
 2. **Clone and Build**
    ```cmd
-   git clone https://github.com/yourusername/Loki2.git
-   cd Loki2
+   git clone https://github.com/Neo23x0/Loki-RS.git
+   cd Loki-RS
    cargo build --release
    ```
 
@@ -219,7 +219,7 @@ If you have Windows Subsystem for Linux (WSL):
 sudo apt-get update
 sudo apt-get install -y build-essential
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
-cd /mnt/c/path/to/Loki2
+cd /mnt/c/path/to/Loki-RS
 cargo build --release
 ```
 
@@ -249,8 +249,8 @@ cargo build --release
 
 ```bash
 # Clone repository
-git clone https://github.com/yourusername/Loki2.git
-cd Loki2
+git clone https://github.com/Neo23x0/Loki-RS.git
+cd Loki-RS
 
 # Build release
 cargo build --release

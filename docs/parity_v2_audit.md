@@ -1,9 +1,9 @@
-# Loki2 Current State Audit
+# Loki-RS Current State Audit
 
-This document provides a comprehensive audit of Loki2's current implementation status, identifying what's implemented, partial, broken, or missing compared to Loki v1.
+This document provides a comprehensive audit of Loki-RS's current implementation status, identifying what's implemented, partial, broken, or missing compared to Loki v1.
 
-**Last Updated**: Based on code analysis of Loki2 repository
-**Loki2 Version**: 2.0.1-alpha
+**Last Updated**: Based on code analysis of Loki-RS repository
+**Loki-RS Version**: 2.0.1-alpha
 
 ---
 

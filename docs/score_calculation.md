@@ -1,6 +1,6 @@
 # Score Calculation Implementation Guide
 
-This document describes the weighted score calculation formula used in Loki2.
+This document describes the weighted score calculation formula used in Loki-RS.
 
 ## Formula
 

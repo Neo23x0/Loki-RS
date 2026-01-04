@@ -1,4 +1,4 @@
-# LOKI2
+# Loki-RS
 LOKI - Simple IOC and YARA Scanner
 
 ## Status

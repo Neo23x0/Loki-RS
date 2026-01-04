@@ -1,10 +1,10 @@
-# Loki2 Parity Matrix
+# Loki-RS Parity Matrix
 
-This document provides a feature-by-feature comparison between Loki v1 and Loki2, identifying gaps, bugs, and implementation plans.
+This document provides a feature-by-feature comparison between Loki v1 and Loki-RS, identifying gaps, bugs, and implementation plans.
 
 **Last Updated**: Based on comprehensive analysis
 **Loki v1 Version**: 0.51.1
-**Loki2 Version**: 2.0.1-alpha
+**Loki-RS Version**: 2.0.1-alpha
 
 ---
 
@@ -28,7 +28,7 @@ This document provides a feature-by-feature comparison between Loki v1 and Loki2
 
 ## Core Scanning Features
 
-| Feature | Loki v1 Behavior | Loki2 Status | Gap / Bug Description | Priority | Plan | Test Plan |
+| Feature | Loki v1 Behavior | Loki-RS Status | Gap / Bug Description | Priority | Plan | Test Plan |
 |---------|------------------|--------------|----------------------|----------|------|-----------|
 | **File System Scanning** | Recursive directory walk with `os.walk()`, `followlinks=False` | ✅ Implemented | Uses `walkdir` with `follow_links(false)` to match v1 behavior | ✅ | ✅ Complete | Test with symlink directories |
 | **File Type Filtering** | Filters by extension list + file magic signatures | ⚠️ Partial | Uses `file-format` crate, different approach, missing "evil extensions" list | P1 | Add evil extensions list, consider file magic loading | Test with various file types |
@@ -51,7 +51,7 @@ This document provides a feature-by-feature comparison between Loki v1 and Loki2
 
 ## CLI Interface
 
-| Feature | Loki v1 Behavior | Loki2 Status | Gap / Bug Description | Priority | Plan | Test Plan |
+| Feature | Loki v1 Behavior | Loki-RS Status | Gap / Bug Description | Priority | Plan | Test Plan |
 |---------|------------------|--------------|----------------------|----------|------|-----------|
 | **Path Selection (`-p`)** | Default `C:\` or `/`, configurable | ⚠️ Partial | Uses `--folder` instead of `-p` | P1 | Add `-p` alias, keep `--folder` | Test path selection |
 | **File Size (`-s` KB)** | Size in KB, default 5000 | ❌ Missing | Only bytes option exists | P1 | Add `-s` flag for KB | Test KB vs bytes |
@@ -74,12 +74,12 @@ This document provides a feature-by-feature comparison between Loki v1 and Loki2
 
 ## Path Exclusions and Filtering
 
-| Feature | Loki v1 Behavior | Loki2 Status | Gap / Bug Description | Priority | Plan | Test Plan |
+| Feature | Loki v1 Behavior | Loki-RS Status | Gap / Bug Description | Priority | Plan | Test Plan |
 |---------|------------------|--------------|----------------------|----------|------|-----------|
 | **Linux Path Exclusions** | Excludes `/proc`, `/dev`, `/sys`, etc. | ✅ Implemented | Excludes `/proc`, `/dev`, `/sys/kernel/debug`, `/sys/kernel/slab`, `/sys/devices`, `/usr/src/linux`, `/media`, `/volumes` (unless `--scan-all-drives`) | ✅ | ✅ Complete | Test on Linux system |
 | **Windows Drive Handling** | `--allhds`, `--alldrives` options | ❌ Missing | No Windows-specific drive handling | P2 | Add Windows drive enumeration | Test on Windows |
 | **User Excludes Config** | `config/excludes.cfg` regex patterns | ❌ Missing | No config file support | P1 | Load and apply excludes.cfg | Test with exclude patterns |
-| **Program Directory Skip** | Skips Loki's own directory | ❌ Missing | May scan own directory | P1 | Detect and skip program directory | Test with Loki2 in scan path |
+| **Program Directory Skip** | Skips Loki's own directory | ❌ Missing | May scan own directory | P1 | Detect and skip program directory | Test with Loki-RS in scan path |
 | **Mounted Devices** | Excludes `/media`, `/volumes` | ⚠️ Partial | Only excludes `/Volumes/` | P1 | Add `/media` exclusion | Test with mounted drives |
 | **Network Drives** | Excludes network drives (unless `--alldrives`) | ❌ Missing | No network drive detection | P2 | Detect and exclude network drives | Test with network mounts |
 
@@ -87,7 +87,7 @@ This document provides a feature-by-feature comparison between Loki v1 and Loki2
 
 ## Output and Reporting
 
-| Feature | Loki v1 Behavior | Loki2 Status | Gap / Bug Description | Priority | Plan | Test Plan |
+| Feature | Loki v1 Behavior | Loki-RS Status | Gap / Bug Description | Priority | Plan | Test Plan |
 |---------|------------------|--------------|----------------------|----------|------|-----------|
 | **Console Colors** | Colorama with specific colors per level | ⚠️ Partial | Basic colors via flexi_logger | P2 | Enhance colorization to match v1 | Test color output |
 | **Message Formatting** | Key-value pairs with line breaks | ⚠️ Partial | Basic formatting | P2 | Add key-value formatting | Test formatted output |
@@ -100,7 +100,7 @@ This document provides a feature-by-feature comparison between Loki v1 and Loki2
 
 ## Error Handling and Robustness
 
-| Feature | Loki v1 Behavior | Loki2 Status | Gap / Bug Description | Priority | Plan | Test Plan |
+| Feature | Loki v1 Behavior | Loki-RS Status | Gap / Bug Description | Priority | Plan | Test Plan |
 |---------|------------------|--------------|----------------------|----------|------|-----------|
 | **Graceful IOC Load Errors** | Logs error, continues or exits gracefully | ✅ Implemented | Replaced `expect()` with Result handling, returns empty vectors on errors | ✅ | ✅ Complete | Test with missing IOC files |
 | **Graceful YARA Errors** | Logs error, skips file | ✅ Implemented | Returns Result from compilation, handles scan errors gracefully | ✅ | ✅ Complete | Test with invalid YARA rules |
@@ -114,7 +114,7 @@ This document provides a feature-by-feature comparison between Loki v1 and Loki2
 
 ## Platform-Specific Features
 
-| Feature | Loki v1 Behavior | Loki2 Status | Gap / Bug Description | Priority | Plan | Test Plan |
+| Feature | Loki v1 Behavior | Loki-RS Status | Gap / Bug Description | Priority | Plan | Test Plan |
 |---------|------------------|--------------|----------------------|----------|------|-----------|
 | **Windows Process Enumeration** | WMI for process list | ⚠️ Partial | Uses sysinfo (cross-platform) | P2 | Consider WMI for Windows | Test process enumeration |
 | **PE-Sieve Integration** | Windows process analysis tool | ❌ Missing | No PE-Sieve support | Skip | Windows-only, complex dependency | - |
@@ -129,7 +129,7 @@ This document provides a feature-by-feature comparison between Loki v1 and Loki2
 
 ## Advanced Features
 
-| Feature | Loki v1 Behavior | Loki2 Status | Gap / Bug Description | Priority | Plan | Test Plan |
+| Feature | Loki v1 Behavior | Loki-RS Status | Gap / Bug Description | Priority | Plan | Test Plan |
 |---------|------------------|--------------|----------------------|----------|------|-----------|
 | **Levenshtein Distance** | Filename similarity check | ❌ Missing | No Levenshtein check | P3 | Low priority, can be added later | - |
 | **Script Analysis** | Statistical obfuscation detection | ❌ Missing | Beta feature in v1 | Skip | Beta feature, can skip | - |
@@ -141,7 +141,7 @@ This document provides a feature-by-feature comparison between Loki v1 and Loki2
 
 ## Performance Optimizations
 
-| Feature | Loki v1 Behavior | Loki2 Status | Gap / Bug Description | Priority | Plan | Test Plan |
+| Feature | Loki v1 Behavior | Loki-RS Status | Gap / Bug Description | Priority | Plan | Test Plan |
 |---------|------------------|--------------|----------------------|----------|------|-----------|
 | **Hash Binary Search** | Sorted lists + binary search | ❌ Missing | Linear search | P1 | Implement binary search | Test with large hash sets |
 | **File Magic Caching** | Caches max signature length | ❌ Missing | No magic file support | P2 | If adding magic file, cache length | - |
@@ -197,7 +197,7 @@ These features can be skipped or have better alternatives:
 
 ## Score Calculation Formula
 
-**Important**: Loki2 will use a **weighted score calculation** instead of simple addition. This is a divergence from Loki v1 but provides better scoring.
+**Important**: Loki-RS will use a **weighted score calculation** instead of simple addition. This is a divergence from Loki v1 but provides better scoring.
 
 ### Formula
 
@@ -246,9 +246,9 @@ score = 100 * (1 - (0.3 * 0.65 * 0.875 * 0.95 * 0.975))
 
 ## Implementation Notes
 
-### Better Approaches in Loki2
+### Better Approaches in Loki-RS
 
-Some features in Loki2 may be implemented differently (and better) than v1:
+Some features in Loki-RS may be implemented differently (and better) than v1:
 
 1. **File Format Detection**: Using `file-format` crate instead of custom magic file - **Keep this approach**
 2. **Process Enumeration**: Using `sysinfo` (cross-platform) instead of WMI - **Keep this approach**

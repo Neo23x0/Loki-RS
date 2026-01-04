@@ -1,6 +1,6 @@
 # Loki v1 Feature Inventory
 
-This document provides a comprehensive inventory of all features, behaviors, and implementation details found in Loki v1 (Python). This serves as the reference specification for achieving feature parity in Loki2.
+This document provides a comprehensive inventory of all features, behaviors, and implementation details found in Loki v1 (Python). This serves as the reference specification for achieving feature parity in Loki-RS.
 
 **Last Updated**: Based on analysis of Loki repository
 **Loki v1 Version**: 0.51.1 (from lokilogger.py)
