@@ -675,7 +675,14 @@ fn initialize_yara_rules() -> Result<Rules, String> {
             return Err(format!("Error parsing the composed rule set: {:?}", e));
         }
     };
-    log::info!("Successfully compiled {} rule files into a big set", count);
+    
+    // Count initialized rules by analyzing the source string (approximate)
+    // Counts lines starting with "rule " (ignoring whitespace)
+    let rule_count = all_rules.lines()
+        .filter(|line| line.trim().starts_with("rule "))
+        .count();
+    
+    log::info!("Successfully compiled {} rules from {} rule files into a big set", rule_count, count);
     Ok(compiled_all_rules)
 }
 
@@ -734,17 +741,24 @@ fn log_cmdline_format(
     let colored_msg = match level {
         log::Level::Error => {
             if msg.starts_with("ALERT") {
-                format!("[{}] {}", level, msg).red()
+                let clean_msg = msg.trim_start_matches("ALERT").trim();
+                format!("[ALERT] {}", clean_msg).red()
             } else {
                 format!("[{}] {}", level, msg).purple()
             }
         },
         log::Level::Warn => {
-            format!("[{}] {}", level, msg).yellow()
+            if msg.starts_with("WARNING") {
+                let clean_msg = msg.trim_start_matches("WARNING").trim();
+                format!("[WARNING] {}", clean_msg).yellow()
+            } else {
+                format!("[{}] {}", level, msg).yellow()
+            }
         },
         log::Level::Info => {
             if msg.starts_with("NOTICE") {
-                format!("[{}] {}", level, msg).bright_cyan()
+                let clean_msg = msg.trim_start_matches("NOTICE").trim();
+                format!("[NOTICE] {}", clean_msg).bright_cyan()
             } else {
                 format!("[{}] {}", level, msg).green()
             }

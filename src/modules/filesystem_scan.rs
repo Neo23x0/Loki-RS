@@ -274,7 +274,7 @@ pub fn scan_path (
                     };
                     
                     if !is_false_positive {
-                        let match_message = format!("File Name IOC matched PATTERN: {} DESC: {}", 
+                        let match_message = format!("File Name IOC matched\n         PATTERN: {}\n         DESC: {}", 
                             fioc.pattern, fioc.description);
                         sample_matches.insert(
                             sample_matches.len(),
@@ -321,7 +321,7 @@ pub fn scan_path (
         if !sample_matches.is_full() {
             // Binary search for MD5
             if let Some(hash_ioc) = find_hash_ioc(&md5_value, &hash_collections.md5_iocs) {
-                let match_message = format!("HASH match with IOC HASH: {} DESC: {}", hash_ioc.hash_value, hash_ioc.description);
+                let match_message = format!("HASH match with IOC\n         HASH: {}\n         DESC: {}", hash_ioc.hash_value, hash_ioc.description);
                 sample_matches.insert(
                     sample_matches.len(),
                     GenMatch{message: match_message, score: hash_ioc.score}
@@ -330,7 +330,7 @@ pub fn scan_path (
             
             // Binary search for SHA1
             if let Some(hash_ioc) = find_hash_ioc(&sha1_value, &hash_collections.sha1_iocs) {
-                let match_message = format!("HASH match with IOC HASH: {} DESC: {}", hash_ioc.hash_value, hash_ioc.description);
+                let match_message = format!("HASH match with IOC\n         HASH: {}\n         DESC: {}", hash_ioc.hash_value, hash_ioc.description);
                 sample_matches.insert(
                     sample_matches.len(),
                     GenMatch{message: match_message, score: hash_ioc.score}
@@ -339,7 +339,7 @@ pub fn scan_path (
             
             // Binary search for SHA256
             if let Some(hash_ioc) = find_hash_ioc(&sha256_value, &hash_collections.sha256_iocs) {
-                let match_message = format!("HASH match with IOC HASH: {} DESC: {}", hash_ioc.hash_value, hash_ioc.description);
+                let match_message = format!("HASH match with IOC\n         HASH: {}\n         DESC: {}", hash_ioc.hash_value, hash_ioc.description);
                 sample_matches.insert(
                     sample_matches.len(),
                     GenMatch{message: match_message, score: hash_ioc.score}
@@ -383,10 +383,10 @@ pub fn scan_path (
                 // Build match message with metadata
                 let mut match_message = format!("YARA match with rule {}", ymatch.rulename);
                 if !ymatch.description.is_empty() {
-                    match_message.push_str(&format!(" DESC: {}", ymatch.description));
+                    match_message.push_str(&format!("\n         DESC: {}", ymatch.description));
                 }
                 if !ymatch.author.is_empty() {
-                    match_message.push_str(&format!(" AUTHOR: {}", ymatch.author));
+                    match_message.push_str(&format!("\n         AUTHOR: {}", ymatch.author));
                 }
                 if !ymatch.matched_strings.is_empty() {
                     // Limit string matches to first 3 and truncate long strings
@@ -399,7 +399,7 @@ pub fn scan_path (
                         };
                         strings_display.push(truncated);
                     }
-                    match_message.push_str(&format!(" STRINGS: {}", strings_display.join(" ")));
+                    match_message.push_str(&format!("\n         STRINGS: {}", strings_display.join(" ")));
                     if ymatch.matched_strings.len() > 3 {
                         match_message.push_str(&format!(" (and {} more)", ymatch.matched_strings.len() - 3));
                     }
@@ -443,23 +443,23 @@ pub fn scan_path (
             let shown_reasons: Vec<&GenMatch> = sample_matches.iter().take(reasons_to_show).collect();
             
             // Format output
-            let mut output = format!("FILE: {} SCORE: {:.2} TYPE: {} SIZE: {} ", 
+            let mut output = format!("FILE: {}\n      SCORE: {:.0} TYPE: {} SIZE: {}\n", 
                 entry.path().display(),
-                total_score,
+                total_score.round(),
                 file_format_desc,
                 realsize);
             
             // Add hash info
-            output.push_str(&format!("MD5: {} SHA1: {} SHA256: {} ", 
+            output.push_str(&format!("      MD5: {}\n      SHA1: {}\n      SHA256: {}\n", 
                 sample_info.md5, sample_info.sha1, sample_info.sha256));
             
             // Add reasons
             for (i, reason) in shown_reasons.iter().enumerate() {
-                output.push_str(&format!("REASON_{}: {} SUBSCORE: {} ", i + 1, reason.message, reason.score));
+                output.push_str(&format!("      REASON_{}: {}\n         SUBSCORE: {}\n", i + 1, reason.message, reason.score));
             }
             
             if sample_matches.len() > reasons_to_show {
-                output.push_str(&format!("(and {} more reasons)", sample_matches.len() - reasons_to_show));
+                output.push_str(&format!("      (and {} more reasons)\n", sample_matches.len() - reasons_to_show));
             }
             
             // Log with appropriate level

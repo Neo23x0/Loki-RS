@@ -14,6 +14,12 @@ use crate::helpers::jsonl_logger::{JsonlLogger, MatchReason};
 
 // Scan process memory of all processes
 pub fn scan_processes(compiled_rules: &Rules, scan_config: &ScanConfig, c2_iocs: &[C2IOC], jsonl_logger: Option<&JsonlLogger>) -> (usize, usize, usize, usize, usize) {
+    // Check if we are running on Linux
+    if cfg!(not(target_os = "linux")) {
+        log::warn!("Process scanning is currently only supported on Linux. (yara-x doesn't support process scanning on other platforms, yet)");
+        return (0, 0, 0, 0, 0);
+    }
+
     // Returns: (processes_scanned, processes_matched, alerts, warnings, notices)
     let mut processes_scanned = 0;
     let mut processes_matched = 0;
@@ -169,10 +175,10 @@ pub fn scan_processes(compiled_rules: &Rules, scan_config: &ScanConfig, c2_iocs:
                 // Build match message with metadata
                 let mut match_message = format!("YARA-X match with rule {}", rule_id);
                 if !description.is_empty() {
-                    match_message.push_str(&format!(" DESC: {}", description));
+                    match_message.push_str(&format!("\n         DESC: {}", description));
                 }
                 if !author.is_empty() {
-                    match_message.push_str(&format!(" AUTHOR: {}", author));
+                    match_message.push_str(&format!("\n         AUTHOR: {}", author));
                 }
                 if !matched_strings.is_empty() {
                     // Limit string matches to first 3 and truncate long strings
@@ -185,7 +191,7 @@ pub fn scan_processes(compiled_rules: &Rules, scan_config: &ScanConfig, c2_iocs:
                         };
                         strings_display.push(truncated);
                     }
-                    match_message.push_str(&format!(" STRINGS: {}", strings_display.join(" ")));
+                    match_message.push_str(&format!("\n         STRINGS: {}", strings_display.join(" ")));
                     if matched_strings.len() > 3 {
                         match_message.push_str(&format!(" (and {} more)", matched_strings.len() - 3));
                     }
@@ -206,7 +212,7 @@ pub fn scan_processes(compiled_rules: &Rules, scan_config: &ScanConfig, c2_iocs:
             for (remote_ip, remote_port) in connections {
                 // Check if remote IP/domain matches any C2 IOC
                 if let Some(c2_ioc) = check_c2_match(&remote_ip, c2_iocs) {
-                    let match_message = format!("C2 IOC match in remote address IP: {} PORT: {} DESC: {}", 
+                    let match_message = format!("C2 IOC match in remote address\n         IP: {}\n         PORT: {}\n         DESC: {}", 
                         remote_ip, remote_port, c2_ioc.description);
                     proc_matches.insert(
                         proc_matches.len(),
@@ -249,15 +255,15 @@ pub fn scan_processes(compiled_rules: &Rules, scan_config: &ScanConfig, c2_iocs:
             let reasons_to_show = std::cmp::min(proc_matches.len(), scan_config.max_reasons);
             let shown_reasons: Vec<&GenMatch> = proc_matches.iter().take(reasons_to_show).collect();
             
-            let mut output = format!("PID: {} PROC_NAME: {} SCORE: {:.2} ", 
-                pid_u32, proc_name_str, total_score);
+            let mut output = format!("PID: {} PROC_NAME: {}\n      SCORE: {:.0}\n", 
+                pid_u32, proc_name_str, total_score.round());
             
             for (i, reason) in shown_reasons.iter().enumerate() {
-                output.push_str(&format!("REASON_{}: {} SUBSCORE: {} ", i + 1, reason.message, reason.score));
+                output.push_str(&format!("      REASON_{}: {} SUBSCORE: {}\n", i + 1, reason.message, reason.score));
             }
             
             if proc_matches.len() > reasons_to_show {
-                output.push_str(&format!("(and {} more reasons)", proc_matches.len() - reasons_to_show));
+                output.push_str(&format!("      (and {} more reasons)\n", proc_matches.len() - reasons_to_show));
             }
             
             // Log with appropriate level
