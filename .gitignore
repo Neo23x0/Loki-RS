@@ -20,3 +20,4 @@ signatures/yara/test.yar
 signatures/yara/faulty.yar
 dist/
 tmp/
+build/
