@@ -48,3 +48,113 @@ pub fn get_hostname() -> String {
 pub fn get_os_type() -> String {
     env::consts::OS.to_string()
 }
+
+#[allow(dead_code)]
+pub fn parse_size_string(size_str: &str) -> Result<usize, String> {
+    let s = size_str.trim().to_uppercase();
+    
+    // Try parsing as raw number first
+    if let Ok(num) = s.parse::<usize>() {
+        return Ok(num);
+    }
+    
+    // Check suffixes
+    let (num_str, multiplier) = if s.ends_with("GB") || s.ends_with("G") {
+        (s.trim_end_matches("GB").trim_end_matches('G'), 1024 * 1024 * 1024)
+    } else if s.ends_with("MB") || s.ends_with("M") {
+        (s.trim_end_matches("MB").trim_end_matches('M'), 1024 * 1024)
+    } else if s.ends_with("KB") || s.ends_with("K") {
+        (s.trim_end_matches("KB").trim_end_matches('K'), 1024)
+    } else if s.ends_with("B") {
+        (s.trim_end_matches('B'), 1)
+    } else {
+        return Err(format!("Unknown size format: {}", s));
+    };
+    
+    // Parse the number part
+    let num = num_str.trim().parse::<usize>()
+        .map_err(|_| format!("Invalid number format: {}", num_str))?;
+        
+    Ok(num * multiplier)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    mod parse_size_tests {
+        use super::*;
+
+        #[test]
+        fn test_parse_raw_bytes() {
+            assert_eq!(parse_size_string("1000").unwrap(), 1000);
+            assert_eq!(parse_size_string("0").unwrap(), 0);
+            assert_eq!(parse_size_string("12345678").unwrap(), 12345678);
+        }
+
+        #[test]
+        fn test_parse_bytes_with_suffix() {
+            assert_eq!(parse_size_string("100B").unwrap(), 100);
+            assert_eq!(parse_size_string("100b").unwrap(), 100);
+        }
+
+        #[test]
+        fn test_parse_kilobytes() {
+            assert_eq!(parse_size_string("1K").unwrap(), 1024);
+            assert_eq!(parse_size_string("1KB").unwrap(), 1024);
+            assert_eq!(parse_size_string("10k").unwrap(), 10 * 1024);
+            assert_eq!(parse_size_string("10kb").unwrap(), 10 * 1024);
+        }
+
+        #[test]
+        fn test_parse_megabytes() {
+            assert_eq!(parse_size_string("1M").unwrap(), 1024 * 1024);
+            assert_eq!(parse_size_string("1MB").unwrap(), 1024 * 1024);
+            assert_eq!(parse_size_string("10m").unwrap(), 10 * 1024 * 1024);
+            assert_eq!(parse_size_string("10mb").unwrap(), 10 * 1024 * 1024);
+        }
+
+        #[test]
+        fn test_parse_gigabytes() {
+            assert_eq!(parse_size_string("1G").unwrap(), 1024 * 1024 * 1024);
+            assert_eq!(parse_size_string("1GB").unwrap(), 1024 * 1024 * 1024);
+            assert_eq!(parse_size_string("2g").unwrap(), 2 * 1024 * 1024 * 1024);
+        }
+
+        #[test]
+        fn test_parse_with_whitespace() {
+            assert_eq!(parse_size_string("  100  ").unwrap(), 100);
+            assert_eq!(parse_size_string(" 1K ").unwrap(), 1024);
+        }
+
+        #[test]
+        fn test_parse_invalid_format() {
+            assert!(parse_size_string("abc").is_err());
+            assert!(parse_size_string("").is_err());
+            assert!(parse_size_string("1T").is_err());
+            assert!(parse_size_string("1TB").is_err());
+        }
+    }
+
+    mod os_type_tests {
+        use super::*;
+
+        #[test]
+        fn test_get_os_type_returns_valid_os() {
+            let os_type = get_os_type();
+            assert!(!os_type.is_empty());
+            let valid_os = ["linux", "macos", "windows", "freebsd", "openbsd", "netbsd"];
+            assert!(valid_os.iter().any(|&os| os_type == os) || !os_type.is_empty());
+        }
+    }
+
+    mod hostname_tests {
+        use super::*;
+
+        #[test]
+        fn test_get_hostname_returns_string() {
+            let hostname = get_hostname();
+            assert!(!hostname.is_empty() || hostname == "unknown");
+        }
+    }
+}

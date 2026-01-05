@@ -108,10 +108,34 @@ sudo ./loki --jsonl scan_results.jsonl
 | `--warning-level <SCORE>` | `60` | Score threshold for WARNING. |
 | `--notice-level <SCORE>` | `40` | Score threshold for NOTICE. |
 | `--max-reasons <NUM>` | `2` | Max number of match reasons to display per hit. |
+| `--threads <NUM>` | `-2` | Number of threads. See [Threading](#threading). |
 | `--jsonl <FILE>` | `None` | Enable structured JSONL logging to file. |
 | `--debug` | `false` | Show debug information. |
 | `--trace` | `false` | Show verbose trace output. |
 | `--version` | `false` | Show version and exit. |
+
+### Threading
+
+The `--threads` option controls how many parallel threads Loki uses for scanning.
+
+| Value | Behavior |
+|-------|----------|
+| Positive (e.g., `4`) | Use exactly that many threads. |
+| `0` | Use all available CPU cores. |
+| `-1` | Use all cores minus 1 (leaves one core free). |
+| `-2` | Use all cores minus 2 (default, leaves two cores free). |
+
+On systems with 2 or fewer cores, negative values will always use at least 1 thread.
+
+**Examples:**
+
+```bash
+# Low-resource systems (single-threaded, minimal CPU impact)
+sudo ./loki --threads 1
+
+# High-performance systems (use all available cores)
+sudo ./loki --threads 0
+```
 
 ## 📊 Scoring & Output
 
