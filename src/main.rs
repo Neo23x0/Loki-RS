@@ -799,7 +799,7 @@ fn main() {
     let (args, _rest) = opts! {
         synopsis "LOKI YARA and IOC Scanner";
         opt cpu_limit:u8=100, desc:"CPU utilization limit percentage (1-100, default: 100)";
-        opt max_file_size:usize=10_000_000, desc:"Maximum file size to scan";
+        opt max_file_size:usize=64_000_000, desc:"Maximum file size to scan (default: 64MB)";
         opt show_access_errors:bool, desc:"Show all file and process access errors";
         opt scan_all_drives:bool, desc:"Scan all drives (including mounted drives, usb drives, cloud drives)";
         opt scan_all_files:bool, desc:"Scan all files regardless of their file type / extension";
@@ -928,6 +928,21 @@ fn main() {
         cpu_limit: args.cpu_limit,
     };
     
+    // Print scan configuration limits
+    log::info!("Scan limits MAX_FILE_SIZE: {} bytes ({:.1} MB)", 
+        scan_config.max_file_size, 
+        scan_config.max_file_size as f64 / 1_000_000.0);
+    log::info!("Scan limits SCAN_ALL_TYPES: {} SCAN_ALL_DRIVES: {}", 
+        scan_config.scan_all_types, 
+        scan_config.scan_all_drives);
+    if !scan_config.scan_all_types {
+        log::info!("Scanned extensions: .exe, .dll, .bat, .ps1, .asp, .aspx, .jsp, .jspx, .php, .plist, .sh, .vbs, .js, .dmp, .py, .msix");
+        log::info!("Scanned file types: Executable, DLL, ISO, ZIP, LNK, CHM, PCAP and more (use --scan-all-files to scan all)");
+    }
+    if !scan_config.scan_all_drives {
+        log::info!("Excluded paths: /proc, /dev, /sys/kernel, /media, /volumes, /Volumes, CloudStorage (use --scan-all-drives to include)");
+    }
+
     // Initialize IOCs 
     log::info!("Initialize hash IOCs ...");
     let hash_iocs = initialize_hash_iocs();
@@ -1350,7 +1365,7 @@ mod tests {
         #[test]
         fn test_default_scan_config() {
             let config = ScanConfig {
-                max_file_size: 10_000_000,
+                max_file_size: 64_000_000,
                 show_access_errors: false,
                 scan_all_types: false,
                 scan_all_drives: false,
@@ -1362,7 +1377,7 @@ mod tests {
                 cpu_limit: 100,
             };
 
-            assert_eq!(config.max_file_size, 10_000_000);
+            assert_eq!(config.max_file_size, 64_000_000);
             assert!(!config.show_access_errors);
             assert_eq!(config.alert_threshold, 80);
             assert!(config.alert_threshold > config.warning_threshold);
@@ -1372,7 +1387,7 @@ mod tests {
         #[test]
         fn test_threshold_ordering() {
             let config = ScanConfig {
-                max_file_size: 10_000_000,
+                max_file_size: 64_000_000,
                 show_access_errors: false,
                 scan_all_types: false,
                 scan_all_drives: false,
