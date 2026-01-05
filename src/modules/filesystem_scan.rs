@@ -11,12 +11,19 @@ use memmap2::MmapOptions;
 use walkdir::{WalkDir, DirEntry};
 use yara_x::{Scanner, Rules};
 use rayon::prelude::*;
+use colored::*;
+
+#[cfg(windows)]
+use windows::core::{PCWSTR, HSTRING};
+#[cfg(windows)]
+use windows::Win32::Storage::FileSystem::{GetDriveTypeW, DRIVE_REMOTE, DRIVE_NO_ROOT_DIR};
 
 use crate::{ScanConfig, GenMatch, HashIOCCollections, FalsePositiveHashCollections, ExtVars, YaraMatch, FilenameIOC, find_hash_ioc};
 use crate::helpers::score::calculate_weighted_score;
 use crate::helpers::jsonl_logger::{JsonlLogger, MatchReason};
 use crate::helpers::remote_logger::RemoteLogger;
 use crate::helpers::throttler::{init_thread_throttler, throttle_start, throttle_end};
+use crate::helpers::helpers::log_access_error;
 
 const REL_EXTS: &'static [&'static str] = &[".exe", ".dll", ".bat", ".ps1", ".asp", ".aspx", ".jsp", ".jspx", 
     ".php", ".plist", ".sh", ".vbs", ".js", ".dmp", ".py", ".msix"];
@@ -37,6 +44,54 @@ const FILE_TYPES: &'static [&'static str] = &[
 const ALL_DRIVE_EXCLUDES: &'static [&'static str] = &[
     "/Library/CloudStorage/",
     "/Volumes/"
+];
+
+// Windows cloud storage paths
+const WINDOWS_CLOUD_PATHS: &[&str] = &[
+    "\\OneDrive",
+    "\\Dropbox", 
+    "\\Google Drive",
+    "\\iCloudDrive",
+    "\\Box",
+    "\\Nextcloud",
+    "\\Tresorit",
+    "\\TresoritDrive",
+    "\\Tresors",
+    "\\pCloud",
+    "\\MEGA",
+    "\\Sync",
+    "\\SpiderOak Hive",
+    "\\Egnyte",
+    "\\ShareFile",
+    "\\Syncplicity Folders",
+    "\\Seafile",
+    "\\Resilio Sync",
+    "\\Syncthing",
+    "\\ownCloud",
+];
+
+// Unix cloud storage paths (in addition to existing ALL_DRIVE_EXCLUDES)
+const UNIX_CLOUD_PATHS: &[&str] = &[
+    "/OneDrive",
+    "/Dropbox",
+    "/.dropbox",
+    "/Google Drive",
+    "/Box",
+    "/Nextcloud",
+    "/Tresorit",
+    "/TresoritDrive",
+    "/Tresors",
+    "/pCloud",
+    "/MEGA",
+    "/MEGAsync",
+    "/Sync",
+    "/SpiderOak Hive",
+    "/Seafile",
+    "/Resilio Sync",
+    "/Syncthing",
+    "/ownCloud",
+    "/Koofr",
+    "/Icedrive",
 ];
 
 // Linux/Mac path exclusions (start of path)
@@ -73,9 +128,78 @@ struct SampleInfo {
     ctime: String,
 }
 
+// Check if a path is likely a cloud storage folder
+fn is_cloud_or_remote_path(path: &str) -> bool {
+    let path_lower = path.to_lowercase();
+    
+    // Windows checks
+    if cfg!(windows) {
+        for cloud_path in WINDOWS_CLOUD_PATHS {
+            if path_lower.contains(&cloud_path.to_lowercase()) {
+                return true;
+            }
+        }
+    } else {
+        // Unix checks
+        for cloud_path in UNIX_CLOUD_PATHS {
+            if path_lower.contains(&cloud_path.to_lowercase()) {
+                return true;
+            }
+        }
+    }
+    
+    false
+}
+
+// Check if a root path is a network drive (Windows only)
+#[cfg(windows)]
+fn is_network_drive(path: &str) -> bool {
+    // Need a root path like "C:\" or "\\server\share"
+    // If path is just a letter "C:", append backslash
+    let root = if path.len() == 2 && path.chars().nth(1) == Some(':') {
+        format!("{}\\", path)
+    } else {
+        path.to_string()
+    };
+    
+    let h_root = HSTRING::from(&root);
+    let drive_type = unsafe { GetDriveTypeW(PCWSTR(h_root.as_ptr())) };
+    
+    // DRIVE_REMOTE = 4, DRIVE_NO_ROOT_DIR = 1
+    drive_type == DRIVE_REMOTE || drive_type == DRIVE_NO_ROOT_DIR
+}
+
+#[cfg(not(windows))]
+fn is_network_drive(_path: &str) -> bool {
+    false
+}
+
+use crate::modules::{ScanModule, ScanContext, ModuleResult};
+
+pub struct FileScanModule;
+
+impl ScanModule for FileScanModule {
+    fn name(&self) -> &'static str {
+        "FileScan"
+    }
+
+    fn run(&self, context: &ScanContext) -> ModuleResult {
+        scan_path(
+            context.target_folder,
+            context.compiled_rules,
+            context.scan_config,
+            context.hash_collections,
+            context.fp_hash_collections,
+            context.filename_iocs,
+            context.jsonl_logger,
+            context.remote_logger
+        )
+    }
+}
+
 // Scan a given file system path
 pub fn scan_path (
-    target_folder: String, 
+    target_folder: &str, 
     compiled_rules: &Rules, 
     scan_config: &ScanConfig, 
     hash_collections: &HashIOCCollections,
@@ -86,8 +210,22 @@ pub fn scan_path (
     
     let cpu_limit = scan_config.cpu_limit;
     
+    // Check if target folder itself is on a network drive or cloud path
+    // Only check if we are NOT scanning all drives explicitly
+    if !scan_config.scan_all_drives {
+        if is_network_drive(target_folder) {
+            log::warn!("Skipping network drive TARGET: {}", target_folder);
+            return (0, 0, 0, 0, 0);
+        }
+        
+        if is_cloud_or_remote_path(target_folder) {
+            log::warn!("Skipping cloud storage folder TARGET: {}", target_folder);
+            return (0, 0, 0, 0, 0);
+        }
+    }
+    
     // Walk the file system (don't follow symlinks to match v1 behavior)
-    let walk = WalkDir::new(&target_folder)
+    let walk = WalkDir::new(target_folder)
         .follow_links(false)  // Match v1 behavior: followlinks=False
         .into_iter();
         
@@ -112,7 +250,7 @@ pub fn scan_path (
                     result
                 },
                 Err(e) => {
-                    log::debug!("Cannot access file system object ERROR: {:?}", e);
+                    log_access_error("fs_object", &e, scan_config.show_access_errors);
                     (0, 0, 0, 0, 0)
                 }
             }
@@ -153,6 +291,12 @@ fn process_file_entry(
     
     // Determine if we should exclude mounted devices
     let exclude_mounted = !scan_config.scan_all_drives;
+
+    // Cloud/Network exclusions (skip if path contains cloud keywords)
+    if exclude_mounted && is_cloud_or_remote_path(&file_path_str) {
+        log::trace!("Skipping cloud storage path FILE: {}", file_path_str);
+        return (0, 0, 0, 0, 0);
+    }
 
     // Platform-specific path exclusions (Linux/Mac)
     if cfg!(unix) {
@@ -200,7 +344,7 @@ fn process_file_entry(
     let metadata = match metadata_result {
         Ok(metadata) => metadata,
         Err(e) => { 
-            if scan_config.show_access_errors { log::error!("Cannot access file FILE: {:?} ERROR: {:?}", entry.path(), e) }; 
+            log_access_error(&file_path_str, &e, scan_config.show_access_errors);
             return (0, 0, 0, 0, 0);
         }
     };
@@ -208,7 +352,7 @@ fn process_file_entry(
     let realsize = match realsize_result {
         Ok(realsize) => realsize,
         Err(e) => { 
-            if scan_config.show_access_errors { log::error!("Cannot access file FILE: {:?} ERROR: {:?}", entry.path(), e) }; 
+            log_access_error(&file_path_str, &e, scan_config.show_access_errors);
             return (0, 0, 0, 0, 0);
         }
     };
@@ -283,19 +427,14 @@ fn process_file_entry(
     let file_handle = match &result {
         Ok(data) => data,
         Err(e) => { 
-            if scan_config.show_access_errors { log::error!("Cannot access file FILE: {:?} ERROR: {:?}", entry.path(), e); }
-            else { log::debug!("Cannot access file FILE: {:?} ERROR: {:?}", entry.path(), e); }
+            log_access_error(&file_path_str, &e, scan_config.show_access_errors);
             return (files_scanned, 0, 0, 0, 0); // skip the rest of the analysis 
         }
     };
     let mmap = match unsafe { MmapOptions::new().map(file_handle) } {
         Ok(m) => m,
         Err(e) => {
-            if scan_config.show_access_errors {
-                log::error!("Cannot memory-map file FILE: {:?} ERROR: {:?}", entry.path(), e);
-            } else {
-                log::debug!("Cannot memory-map file FILE: {:?} ERROR: {:?}", entry.path(), e);
-            }
+            log_access_error(&file_path_str, &e, scan_config.show_access_errors);
             return (files_scanned, 0, 0, 0, 0); // Skip this file
         }
     };
@@ -486,19 +625,29 @@ fn process_file_entry(
         let shown_reasons: Vec<&GenMatch> = sample_matches.iter().take(reasons_to_show).collect();
         
         // Format output
-        let mut output = format!("FILE: {}\n      SCORE: {:.0} TYPE: {} SIZE: {}\n", 
+        let mut output = format!("FILE: {}\n      {}: {:.0} {}: {} {}: {}\n", 
             entry.path().display(),
-            total_score.round(),
-            file_format_desc,
-            realsize);
+            "SCORE".red(),
+            total_score.round().to_string().white(),
+            "TYPE".red(),
+            file_format_desc.white(),
+            "SIZE".red(),
+            realsize.to_string().white());
         
         // Add hash info
-        output.push_str(&format!("      MD5: {}\n      SHA1: {}\n      SHA256: {}\n", 
-            sample_info.md5, sample_info.sha1, sample_info.sha256));
+        output.push_str(&format!("      {}: {}\n      {}: {}\n      {}: {}\n", 
+            "MD5".red(), sample_info.md5.white(), 
+            "SHA1".red(), sample_info.sha1.white(), 
+            "SHA256".red(), sample_info.sha256.white()));
         
         // Add reasons
         for (i, reason) in shown_reasons.iter().enumerate() {
-            output.push_str(&format!("      REASON_{}: {}\n         SUBSCORE: {}\n", i + 1, reason.message, reason.score));
+            output.push_str(&format!("      {}_{}: {}\n         {}: {}\n", 
+                "REASON".red(), 
+                i + 1, 
+                reason.message.white(), 
+                "SUBSCORE".red(), 
+                reason.score.to_string().white()));
         }
         
         if sample_matches.len() > reasons_to_show {

@@ -14,18 +14,14 @@ use yara_x::{Compiler, Rules};
 
 use crate::helpers::helpers::{get_hostname, get_os_type, evaluate_env};
 use crate::helpers::jsonl_logger::JsonlLogger;
-use crate::modules::process_check::scan_processes;
-use crate::modules::filesystem_scan::scan_path;
+use crate::modules::{ScanModule, ScanContext};
+use crate::modules::process_check::ProcessCheckModule;
+use crate::modules::filesystem_scan::FileScanModule;
 
 // Specific TODOs
-// - skipping non-local file systems like network mounts or cloudfs drives
-
-// General TODOs
 // - better error handling
-// - putting all modules in an array and looping over that list instead of a fixed sequence
-// - restructuring project to multiple files
 
-const VERSION: &str = "2.1.0";
+const VERSION: &str = "2.2.0-alpha";
 
 const SIGNATURE_SOURCE: &str = "./signatures";
 const MODULES: &'static [&'static str] = &["FileScan", "ProcessCheck"];
@@ -747,29 +743,29 @@ fn log_cmdline_format(
         log::Level::Error => {
             if msg.starts_with("ALERT") {
                 let clean_msg = msg.trim_start_matches("ALERT").trim();
-                format!("[ALERT] {}", clean_msg).red()
+                format!(" {} {} ", "[ALERT]".black().on_red(), clean_msg.white())
             } else {
-                format!("[{}] {}", level, msg).purple()
+                format!(" {} {} ", format!("[{}]", level).black().on_purple(), msg.white())
             }
         },
         log::Level::Warn => {
             if msg.starts_with("WARNING") {
                 let clean_msg = msg.trim_start_matches("WARNING").trim();
-                format!("[WARNING] {}", clean_msg).yellow()
+                format!(" {} {} ", "[WARNING]".black().on_yellow(), clean_msg.white())
             } else {
-                format!("[{}] {}", level, msg).yellow()
+                format!(" {} {} ", format!("[{}]", level).black().on_yellow(), msg.white())
             }
         },
         log::Level::Info => {
             if msg.starts_with("NOTICE") {
                 let clean_msg = msg.trim_start_matches("NOTICE").trim();
-                format!("[NOTICE] {}", clean_msg).bright_cyan()
+                format!(" {} {} ", "[NOTICE]".black().on_cyan(), clean_msg.white())
             } else {
-                format!("[{}] {}", level, msg).green()
+                format!(" {} {} ", format!("[{}]", level).black().on_green(), msg.white())
             }
         },
-        log::Level::Debug => format!("[{}] {}", level, msg).white(),
-        log::Level::Trace => format!("[{}] {}", level, msg).white().dimmed(),
+        log::Level::Debug => format!(" {} {} ", format!("[{}]", level).black().on_white(), msg.white()),
+        log::Level::Trace => format!(" {} {} ", format!("[{}]", level).white().on_black(), msg.white().dimmed()),
     };
     
     write!(w, "{}", colored_msg)
@@ -966,23 +962,48 @@ fn main() {
         }
     };
 
-    // Process scan
-    let (proc_scanned, proc_matched, proc_alerts, proc_warnings, proc_notices) = 
-        if active_modules.contains(&"ProcessCheck".to_owned()) {
-            log::info!("Scanning running processes ... ");
-            scan_processes(&compiled_rules, &scan_config, &c2_iocs, &filename_iocs, &hash_collections, jsonl_logger.as_ref(), None)
-        } else {
-            (0, 0, 0, 0, 0)
-        };
+    // Register available modules
+    let modules: Vec<Box<dyn ScanModule>> = vec![
+        Box::new(ProcessCheckModule),
+        Box::new(FileScanModule),
+    ];
+    
+    let mut module_results: std::collections::HashMap<String, (usize, usize, usize, usize, usize)> = std::collections::HashMap::new();
 
-    // File system scan
+    // Execute modules
+    for module in modules {
+        if active_modules.contains(&module.name().to_string()) {
+            if module.name() == "ProcessCheck" {
+                 log::info!("Scanning running processes ... ");
+            } else if module.name() == "FileScan" {
+                 log::info!("Scanning local file system ... ");
+            } else {
+                 log::info!("Running module: {} ...", module.name());
+            }
+
+            let context = ScanContext {
+                compiled_rules: &compiled_rules,
+                scan_config: &scan_config,
+                hash_collections: &hash_collections,
+                fp_hash_collections: &fp_hash_collections,
+                filename_iocs: &filename_iocs,
+                c2_iocs: &c2_iocs,
+                jsonl_logger: jsonl_logger.as_ref(),
+                remote_logger: None,
+                target_folder: &target_folder,
+            };
+            
+            let result = module.run(&context);
+            module_results.insert(module.name().to_string(), result);
+        }
+    }
+
+    // Extract results for summary
+    let (proc_scanned, proc_matched, proc_alerts, proc_warnings, proc_notices) = 
+        *module_results.get("ProcessCheck").unwrap_or(&(0, 0, 0, 0, 0));
+
     let (files_scanned, files_matched, file_alerts, file_warnings, file_notices) = 
-        if active_modules.contains(&"FileScan".to_owned()) {
-            log::info!("Scanning local file system ... ");
-            scan_path(target_folder, &compiled_rules, &scan_config, &hash_collections, &fp_hash_collections, &filename_iocs, jsonl_logger.as_ref(), None)
-        } else {
-            (0, 0, 0, 0, 0)
-        };
+        *module_results.get("FileScan").unwrap_or(&(0, 0, 0, 0, 0));
 
     // Finished scan - collect summary
     let total_alerts = file_alerts + proc_alerts;

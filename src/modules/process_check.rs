@@ -4,14 +4,18 @@ use yara_x::{Scanner, Rules};
 use sysinfo::{System, Pid, Process};
 use hex;
 use rayon::prelude::*;
+use colored::*;
+
+// Linux-specific I/O imports
+#[cfg(target_os = "linux")]
 use std::io::{Read, Seek, SeekFrom};
+#[cfg(target_os = "linux")]
 use std::fs;
-use std::path::Path;
 
 // Hashing imports
 use md5;
-use sha1::{Sha1, Digest as Sha1Digest};
-use sha2::{Sha256, Digest as Sha2Digest};
+use sha1::Sha1;
+use sha2::{Sha256, Digest};
 
 #[cfg(target_os = "windows")]
 use windows::Win32::Foundation::{HANDLE, CloseHandle, FALSE};
@@ -31,6 +35,28 @@ use crate::helpers::score::calculate_weighted_score;
 use crate::helpers::jsonl_logger::{JsonlLogger, MatchReason};
 use crate::helpers::remote_logger::RemoteLogger;
 use crate::helpers::throttler::{init_thread_throttler, throttle_start, throttle_end};
+
+use crate::modules::{ScanModule, ScanContext, ModuleResult};
+
+pub struct ProcessCheckModule;
+
+impl ScanModule for ProcessCheckModule {
+    fn name(&self) -> &'static str {
+        "ProcessCheck"
+    }
+
+    fn run(&self, context: &ScanContext) -> ModuleResult {
+        scan_processes(
+            context.compiled_rules,
+            context.scan_config,
+            context.c2_iocs,
+            context.filename_iocs,
+            context.hash_collections,
+            context.jsonl_logger,
+            context.remote_logger
+        )
+    }
+}
 
 // Scan process memory of all processes
 pub fn scan_processes(
@@ -174,7 +200,7 @@ fn process_single_process(
             if exe_path.exists() && exe_path.is_file() {
                  // Reuse hashing logic, but we need to be careful with reading files of running processes on Windows (might be locked)
                  // fs::read should work for most executables as they are usually open with SHARE_READ
-                 match fs::read(exe_path) {
+                 match std::fs::read(exe_path) {
                     Ok(data) => {
                         let md5_value = format!("{:x}", md5::compute(&data));
                         let sha1_value = hex::encode(Sha1::new().chain_update(&data).finalize());
@@ -217,103 +243,89 @@ fn process_single_process(
     let mem_data = read_process_memory(pid_u32);
 
     if !mem_data.is_empty() {
-        let scan_result = scanner.scan(&mem_data);
-        
-        log::trace!("YARA-X scan result for PID: {} PROC_NAME: {} RESULT: {:?}", pid_u32, proc_name_str, scan_result);
-        
-        // Extract YARA match metadata
-        let yara_matches = match scan_result {
-            Ok(results) => results,
-            Err(e) => {
-                if scan_config.show_access_errors { 
-                    log::error!("Error while scanning process memory PROC_NAME: {} ERROR: {:?}", proc_name_str, e); 
-                } else { 
-                    log::debug!("Error while scanning process memory PROC_NAME: {} ERROR: {:?}", proc_name_str, e); 
-                }
-                // Continue to C2 checks even if YARA fails
-                yara_x::ScanResults::default() // dummy empty result to continue
-            }
-        };
-        
-        for matching_rule in yara_matches.matching_rules() {
-            if !proc_matches.is_full() {
-                let rule_id = matching_rule.identifier().to_string();
-                
-                let mut description = String::new();
-                let mut author = String::new();
-                let mut score = 75;
-                
-                for (key, value) in matching_rule.metadata() {
-                    match key {
-                        "description" => {
-                            if let yara_x::MetaValue::String(s) = value {
-                                description = s.to_string();
-                            }
-                        }
-                        "author" => {
-                            if let yara_x::MetaValue::String(s) = value {
-                                author = s.to_string();
-                            }
-                        }
-                        "score" => {
-                            if let yara_x::MetaValue::Integer(i) = value {
-                                let s = i as i16;
-                                if s > 0 && s <= 100 {
-                                    score = s;
+        if let Ok(scan_results) = scanner.scan(&mem_data) {
+            log::trace!("YARA-X scan result for PID: {} PROC_NAME: {} RESULT: {:?}", pid_u32, proc_name_str, scan_results);
+            
+            for matching_rule in scan_results.matching_rules() {
+                if !proc_matches.is_full() {
+                    let rule_id = matching_rule.identifier().to_string();
+                    
+                    let mut description = String::new();
+                    let mut author = String::new();
+                    let mut score = 75;
+                    
+                    for (key, value) in matching_rule.metadata() {
+                        match key {
+                            "description" => {
+                                if let yara_x::MetaValue::String(s) = value {
+                                    description = s.to_string();
                                 }
                             }
-                        }
-                        _ => {}
-                    }
-                }
-                
-                let mut matched_strings: Vec<String> = Vec::new();
-                for pattern in matching_rule.patterns() {
-                    for pattern_match in pattern.matches() {
-                        let identifier = pattern.identifier();
-                        let offset = pattern_match.range().start;
-                        let data = pattern_match.data();
-                        
-                        let value_str = if data.iter().all(|&b| b.is_ascii() && (b >= 32 || b == 9 || b == 10 || b == 13)) {
-                            match String::from_utf8(data.to_vec()) {
-                                Ok(s) => format!("'{}'", s),
-                                Err(_) => hex::encode(data)
+                            "author" => {
+                                if let yara_x::MetaValue::String(s) = value {
+                                    author = s.to_string();
+                                }
                             }
-                        } else {
-                            hex::encode(data)
-                        };
-                        
-                        matched_strings.push(format!("{}: {} @ {}", identifier, value_str, offset));
+                            "score" => {
+                                if let yara_x::MetaValue::Integer(i) = value {
+                                    let s = i as i16;
+                                    if s > 0 && s <= 100 {
+                                        score = s;
+                                    }
+                                }
+                            }
+                            _ => {}
+                        }
                     }
-                }
-                
-                let mut match_message = format!("YARA-X match with rule {}", rule_id);
-                if !description.is_empty() {
-                    match_message.push_str(&format!("\n         DESC: {}", description));
-                }
-                if !author.is_empty() {
-                    match_message.push_str(&format!("\n         AUTHOR: {}", author));
-                }
-                if !matched_strings.is_empty() {
-                    let mut strings_display = Vec::new();
-                    for s in matched_strings.iter().take(3) {
-                        let truncated = if s.len() > 140 {
-                            format!("{}...", &s[..137])
-                        } else {
-                            s.clone()
-                        };
-                        strings_display.push(truncated);
+                    
+                    let mut matched_strings: Vec<String> = Vec::new();
+                    for pattern in matching_rule.patterns() {
+                        for pattern_match in pattern.matches() {
+                            let identifier = pattern.identifier();
+                            let offset = pattern_match.range().start;
+                            let data = pattern_match.data();
+                            
+                            let value_str = if data.iter().all(|&b: &_| b.is_ascii() && (b >= 32 || b == 9 || b == 10 || b == 13)) {
+                                match String::from_utf8(data.to_vec()) {
+                                    Ok(s) => format!("'{}'", s),
+                                    Err(_) => hex::encode(data)
+                                }
+                            } else {
+                                hex::encode(data)
+                            };
+                            
+                            matched_strings.push(format!("{}: {} @ {}", identifier, value_str, offset));
+                        }
                     }
-                    match_message.push_str(&format!("\n         STRINGS: {}", strings_display.join(" ")));
-                    if matched_strings.len() > 3 {
-                        match_message.push_str(&format!(" (and {} more)", matched_strings.len() - 3));
+                    
+                    let mut match_message = format!("YARA-X match with rule {}", rule_id);
+                    if !description.is_empty() {
+                        match_message.push_str(&format!("\n         DESC: {}", description));
                     }
+                    if !author.is_empty() {
+                        match_message.push_str(&format!("\n         AUTHOR: {}", author));
+                    }
+                    if !matched_strings.is_empty() {
+                        let mut strings_display = Vec::new();
+                        for s in matched_strings.iter().take(3) {
+                            let truncated = if s.len() > 140 {
+                                format!("{}...", &s[..137])
+                            } else {
+                                s.clone()
+                            };
+                            strings_display.push(truncated);
+                        }
+                        match_message.push_str(&format!("\n         STRINGS: {}", strings_display.join(" ")));
+                        if matched_strings.len() > 3 {
+                            match_message.push_str(&format!(" (and {} more)", matched_strings.len() - 3));
+                        }
+                    }
+                    
+                    proc_matches.insert(
+                        proc_matches.len(), 
+                        GenMatch { message: match_message, score }
+                    );
                 }
-                
-                proc_matches.insert(
-                    proc_matches.len(), 
-                    GenMatch { message: match_message, score }
-                );
             }
         }
     }
@@ -363,11 +375,20 @@ fn process_single_process(
         let reasons_to_show = std::cmp::min(proc_matches.len(), scan_config.max_reasons);
         let shown_reasons: Vec<&GenMatch> = proc_matches.iter().take(reasons_to_show).collect();
         
-        let mut output = format!("PID: {} PROC_NAME: {}\n      SCORE: {:.0}\n", 
-            pid_u32, proc_name_str, total_score.round());
+        let mut output = format!("PID: {} {}: {}\n      {}: {:.0}\n", 
+            pid_u32, 
+            "PROC_NAME".red(),
+            proc_name_str.white(), 
+            "SCORE".red(),
+            total_score.round().to_string().white());
         
         for (i, reason) in shown_reasons.iter().enumerate() {
-            output.push_str(&format!("      REASON_{}: {} SUBSCORE: {}\n", i + 1, reason.message, reason.score));
+            output.push_str(&format!("      {}_{}: {} {}: {}\n", 
+                "REASON".red(), 
+                i + 1, 
+                reason.message.white(), 
+                "SUBSCORE".red(),
+                reason.score.to_string().white()));
         }
         
         if proc_matches.len() > reasons_to_show {
@@ -431,7 +452,7 @@ fn get_process_connections(pid: u32) -> Vec<(String, u16)> {
                     netstat2::ProtocolSocketInfo::Tcp(tcp_info) => {
                         (tcp_info.remote_addr.to_string(), tcp_info.remote_port)
                     },
-                    netstat2::ProtocolSocketInfo::Udp(udp_info) => {
+                    netstat2::ProtocolSocketInfo::Udp(_udp_info) => {
                         // UDP is connectionless, but we can check for bound remote addresses if available
                         // Often UDP sockets are 0.0.0.0:*
                          continue; // Skip UDP for now as C2 matching usually targets specific remote TCP connections
