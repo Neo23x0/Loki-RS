@@ -16,7 +16,13 @@ use colored::*;
 #[cfg(windows)]
 use windows::core::{PCWSTR, HSTRING};
 #[cfg(windows)]
-use windows::Win32::Storage::FileSystem::{GetDriveTypeW, DRIVE_REMOTE, DRIVE_NO_ROOT_DIR};
+use windows::Win32::Storage::FileSystem::GetDriveTypeW;
+
+// Define constants manually to avoid import issues
+#[cfg(windows)]
+const DRIVE_REMOTE: u32 = 4;
+#[cfg(windows)]
+const DRIVE_NO_ROOT_DIR: u32 = 1;
 
 use crate::{ScanConfig, GenMatch, HashIOCCollections, FalsePositiveHashCollections, ExtVars, YaraMatch, FilenameIOC, find_hash_ioc};
 use crate::helpers::score::calculate_weighted_score;

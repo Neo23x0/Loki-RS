@@ -18,7 +18,7 @@ use sha1::Sha1;
 use sha2::{Sha256, Digest};
 
 #[cfg(target_os = "windows")]
-use windows::Win32::Foundation::{HANDLE, CloseHandle, FALSE};
+use windows::Win32::Foundation::{CloseHandle, FALSE};
 #[cfg(target_os = "windows")]
 use windows::Win32::System::Threading::{OpenProcess, PROCESS_QUERY_INFORMATION, PROCESS_VM_READ};
 #[cfg(target_os = "windows")]
