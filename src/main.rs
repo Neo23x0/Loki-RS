@@ -970,7 +970,7 @@ fn main() {
     let (proc_scanned, proc_matched, proc_alerts, proc_warnings, proc_notices) = 
         if active_modules.contains(&"ProcessCheck".to_owned()) {
             log::info!("Scanning running processes ... ");
-            scan_processes(&compiled_rules, &scan_config, &c2_iocs, jsonl_logger.as_ref(), None)
+            scan_processes(&compiled_rules, &scan_config, &c2_iocs, &filename_iocs, &hash_collections, jsonl_logger.as_ref(), None)
         } else {
             (0, 0, 0, 0, 0)
         };

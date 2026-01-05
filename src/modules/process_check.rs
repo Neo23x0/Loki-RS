@@ -1,26 +1,51 @@
 use std::process;
 use arrayvec::ArrayVec;
 use yara_x::{Scanner, Rules};
-#[cfg(target_os = "linux")]
-use std::fs;
 use sysinfo::{System, Pid, Process};
 use hex;
-#[cfg(target_os = "linux")]
-use std::io::{BufRead, BufReader};
 use rayon::prelude::*;
+use std::io::{Read, Seek, SeekFrom};
+use std::fs;
+use std::path::Path;
 
-use crate::{ScanConfig, GenMatch, C2IOC, check_c2_match};
+// Hashing imports
+use md5;
+use sha1::{Sha1, Digest as Sha1Digest};
+use sha2::{Sha256, Digest as Sha2Digest};
+
+#[cfg(target_os = "windows")]
+use windows::Win32::Foundation::{HANDLE, CloseHandle, FALSE};
+#[cfg(target_os = "windows")]
+use windows::Win32::System::Threading::{OpenProcess, PROCESS_QUERY_INFORMATION, PROCESS_VM_READ};
+#[cfg(target_os = "windows")]
+use windows::Win32::System::Memory::{VirtualQueryEx, MEMORY_BASIC_INFORMATION, MEM_COMMIT};
+#[cfg(target_os = "windows")]
+use windows::Win32::System::Diagnostics::Debug::ReadProcessMemory;
+#[cfg(target_os = "windows")]
+use std::ffi::c_void;
+
+use netstat2::{get_sockets_info, AddressFamilyFlags, ProtocolFlags};
+
+use crate::{ScanConfig, GenMatch, C2IOC, check_c2_match, FilenameIOC, HashIOCCollections, find_hash_ioc};
 use crate::helpers::score::calculate_weighted_score;
 use crate::helpers::jsonl_logger::{JsonlLogger, MatchReason};
 use crate::helpers::remote_logger::RemoteLogger;
 use crate::helpers::throttler::{init_thread_throttler, throttle_start, throttle_end};
 
 // Scan process memory of all processes
-pub fn scan_processes(compiled_rules: &Rules, scan_config: &ScanConfig, c2_iocs: &[C2IOC], jsonl_logger: Option<&JsonlLogger>, remote_logger: Option<&RemoteLogger>) -> (usize, usize, usize, usize, usize) {
-    // Check if we are running on Linux
-    if cfg!(not(target_os = "linux")) {
-        log::warn!("Process scanning is currently only supported on Linux. (yara-x doesn't support process scanning on other platforms, yet)");
-        return (0, 0, 0, 0, 0);
+pub fn scan_processes(
+    compiled_rules: &Rules, 
+    scan_config: &ScanConfig, 
+    c2_iocs: &[C2IOC], 
+    filename_iocs: &Vec<FilenameIOC>,
+    hash_collections: &HashIOCCollections,
+    jsonl_logger: Option<&JsonlLogger>, 
+    remote_logger: Option<&RemoteLogger>
+) -> (usize, usize, usize, usize, usize) {
+    
+    // Warn if platform is not fully supported for memory scanning
+    if cfg!(target_os = "macos") {
+        log::warn!("Process memory scanning is not supported on macOS due to system protections.");
     }
 
     let cpu_limit = scan_config.cpu_limit;
@@ -35,7 +60,17 @@ pub fn scan_processes(compiled_rules: &Rules, scan_config: &ScanConfig, c2_iocs:
         .map(|(pid, process)| {
             init_thread_throttler(cpu_limit);
             throttle_start();
-            let result = process_single_process(pid, process, compiled_rules, scan_config, c2_iocs, jsonl_logger, remote_logger);
+            let result = process_single_process(
+                pid, 
+                process, 
+                compiled_rules, 
+                scan_config, 
+                c2_iocs, 
+                filename_iocs,
+                hash_collections,
+                jsonl_logger, 
+                remote_logger
+            );
             throttle_end();
             result
         })
@@ -60,6 +95,8 @@ fn process_single_process(
     compiled_rules: &Rules, 
     scan_config: &ScanConfig, 
     c2_iocs: &[C2IOC], 
+    filename_iocs: &Vec<FilenameIOC>,
+    hash_collections: &HashIOCCollections,
     jsonl_logger: Option<&JsonlLogger>,
     remote_logger: Option<&RemoteLogger>
 ) -> (usize, usize, usize, usize, usize) {
@@ -87,151 +124,202 @@ fn process_single_process(
     // Matches (all types)
     let mut proc_matches = ArrayVec::<GenMatch, 100>::new();
     // ------------------------------------------------------------
-    // YARA scanning
+    
+    // 1. Filename IOCs (Command Line & Executable Path)
+    if !proc_matches.is_full() {
+        let exe_path = process.exe().map(|p| p.to_string_lossy().to_string()).unwrap_or_default();
+        let cmd_line = process.cmd().iter().map(|x| x.to_string_lossy()).collect::<Vec<_>>().join(" ");
+        
+        for fioc in filename_iocs {
+            if proc_matches.is_full() { break; }
+            
+            let mut matched = false;
+            let mut match_source = "";
+            
+            // Check exe path
+            if !exe_path.is_empty() && fioc.regex.is_match(&exe_path) {
+                matched = true;
+                match_source = "Executable Path";
+            }
+            // Check command line
+            else if !cmd_line.is_empty() && fioc.regex.is_match(&cmd_line) {
+                matched = true;
+                match_source = "Command Line";
+            }
+            
+            if matched {
+                // Check false positive regex
+                let is_fp = if let Some(ref fp_regex) = fioc.regex_fp {
+                    ( !exe_path.is_empty() && fp_regex.is_match(&exe_path) ) || 
+                    ( !cmd_line.is_empty() && fp_regex.is_match(&cmd_line) )
+                } else {
+                    false
+                };
+                
+                if !is_fp {
+                    let match_message = format!("Filename IOC matched in {}\n         PATTERN: {}\n         DESC: {}", 
+                        match_source, fioc.pattern, fioc.description);
+                    proc_matches.insert(
+                        proc_matches.len(),
+                        GenMatch { message: match_message, score: fioc.score }
+                    );
+                }
+            }
+        }
+    }
+
+    // 2. Hash IOCs (Executable File)
+    if !proc_matches.is_full() {
+        if let Some(exe_path) = process.exe() {
+            if exe_path.exists() && exe_path.is_file() {
+                 // Reuse hashing logic, but we need to be careful with reading files of running processes on Windows (might be locked)
+                 // fs::read should work for most executables as they are usually open with SHARE_READ
+                 match fs::read(exe_path) {
+                    Ok(data) => {
+                        let md5_value = format!("{:x}", md5::compute(&data));
+                        let sha1_value = hex::encode(Sha1::new().chain_update(&data).finalize());
+                        let sha256_value = hex::encode(Sha256::new().chain_update(&data).finalize());
+                        
+                        // Check against hash IOCs
+                        let mut hash_match = None;
+                        
+                        if let Some(ioc) = find_hash_ioc(&md5_value, &hash_collections.md5_iocs) {
+                            hash_match = Some(ioc);
+                        } else if let Some(ioc) = find_hash_ioc(&sha1_value, &hash_collections.sha1_iocs) {
+                            hash_match = Some(ioc);
+                        } else if let Some(ioc) = find_hash_ioc(&sha256_value, &hash_collections.sha256_iocs) {
+                            hash_match = Some(ioc);
+                        }
+                        
+                        if let Some(ioc) = hash_match {
+                            let match_message = format!("Process Executable Hash Match\n         HASH: {}\n         DESC: {}", 
+                                ioc.hash_value, ioc.description);
+                            proc_matches.insert(
+                                proc_matches.len(),
+                                GenMatch { message: match_message, score: ioc.score }
+                            );
+                        }
+                    },
+                    Err(e) => {
+                        log::trace!("Could not read process executable for hashing PID: {} ERROR: {:?}", pid_u32, e);
+                    }
+                 }
+            }
+        }
+    }
+
+    // 3. YARA scanning (Memory)
     // YARA-X: Create scanner and scan process memory
     let mut scanner = Scanner::new(compiled_rules);
     scanner.set_timeout(std::time::Duration::from_secs(30));
     
-    // Read process memory from /proc/<pid>/mem (Linux) or use process memory API
-    // Note: Reading /proc/<pid>/mem requires special permissions and may not work
-    // For now, we'll skip process memory scanning on Linux until we have a better approach
-    // YARA-X doesn't have a direct scan_process method like the old YARA
-    
-    #[cfg(target_os = "linux")]
-    let mem_data = {
-        let proc_mem_path = format!("/proc/{}/mem", pid_u32);
-        match fs::read(&proc_mem_path) {
-            Ok(data) => data,
+    // Read process memory
+    let mem_data = read_process_memory(pid_u32);
+
+    if !mem_data.is_empty() {
+        let scan_result = scanner.scan(&mem_data);
+        
+        log::trace!("YARA-X scan result for PID: {} PROC_NAME: {} RESULT: {:?}", pid_u32, proc_name_str, scan_result);
+        
+        // Extract YARA match metadata
+        let yara_matches = match scan_result {
+            Ok(results) => results,
             Err(e) => {
-                if scan_config.show_access_errors {
-                    log::error!("Cannot read process memory for PID {} ERROR: {:?}", pid_u32, e);
-                } else {
-                    log::debug!("Cannot read process memory for PID {} ERROR: {:?}", pid_u32, e);
+                if scan_config.show_access_errors { 
+                    log::error!("Error while scanning process memory PROC_NAME: {} ERROR: {:?}", proc_name_str, e); 
+                } else { 
+                    log::debug!("Error while scanning process memory PROC_NAME: {} ERROR: {:?}", proc_name_str, e); 
                 }
-                return (processes_scanned, 0, 0, 0, 0); // Skip this process (but we already counted it as scanned)
+                // Continue to C2 checks even if YARA fails
+                yara_x::ScanResults::default() // dummy empty result to continue
             }
-        }
-    };
-
-    #[cfg(not(target_os = "linux"))]
-    let mem_data: Vec<u8> = Vec::new();
-
-    // Skip scanning if no memory data (non-Linux or read failure)
-    if mem_data.is_empty() {
-            // For non-Linux, we just proceed to match rule metadata or skip?
-            // If we have no data, scanner.scan(&mem_data) returns matches on empty string.
-            // Usually we want to skip if we can't read memory.
-            // But let's let it run on empty to be safe, or continue?
-            // If we continue here, we break the logic below.
-            // Better: if mem_data is empty, we might want to skip YARA scan unless we want to match empty.
-            if cfg!(not(target_os = "linux")) {
-                // log::debug!("Process memory scanning not supported on this OS");
-                // We continue loop to check network connections?
-                // But scan_result is needed below.
-            }
-    }
-    
-    let scan_result = scanner.scan(&mem_data);
-    
-    log::trace!("YARA-X scan result for PID: {} PROC_NAME: {} RESULT: {:?}", pid_u32, proc_name_str, scan_result);
-    
-    // Extract YARA match metadata
-    let yara_matches = match scan_result {
-        Ok(results) => results,
-        Err(e) => {
-            if scan_config.show_access_errors { 
-                log::error!("Error while scanning process memory PROC_NAME: {} ERROR: {:?}", proc_name_str, e); 
-            } else { 
-                log::debug!("Error while scanning process memory PROC_NAME: {} ERROR: {:?}", proc_name_str, e); 
-            }
-            return (processes_scanned, 0, 0, 0, 0); // Skip this process (but we already counted it as scanned)
-        }
-    };
-    
-    for matching_rule in yara_matches.matching_rules() {
-        if !proc_matches.is_full() {
-            let rule_id = matching_rule.identifier().to_string();
-            
-            let mut description = String::new();
-            let mut author = String::new();
-            let mut score = 75;
-            
-            for (key, value) in matching_rule.metadata() {
-                match key {
-                    "description" => {
-                        if let yara_x::MetaValue::String(s) = value {
-                            description = s.to_string();
-                        }
-                    }
-                    "author" => {
-                        if let yara_x::MetaValue::String(s) = value {
-                            author = s.to_string();
-                        }
-                    }
-                    "score" => {
-                        if let yara_x::MetaValue::Integer(i) = value {
-                            let s = i as i16;
-                            if s > 0 && s <= 100 {
-                                score = s;
+        };
+        
+        for matching_rule in yara_matches.matching_rules() {
+            if !proc_matches.is_full() {
+                let rule_id = matching_rule.identifier().to_string();
+                
+                let mut description = String::new();
+                let mut author = String::new();
+                let mut score = 75;
+                
+                for (key, value) in matching_rule.metadata() {
+                    match key {
+                        "description" => {
+                            if let yara_x::MetaValue::String(s) = value {
+                                description = s.to_string();
                             }
                         }
-                    }
-                    _ => {}
-                }
-            }
-            
-            let mut matched_strings: Vec<String> = Vec::new();
-            for pattern in matching_rule.patterns() {
-                for pattern_match in pattern.matches() {
-                    let identifier = pattern.identifier();
-                    let offset = pattern_match.range().start;
-                    let data = pattern_match.data();
-                    
-                    let value_str = if data.iter().all(|&b| b.is_ascii() && (b >= 32 || b == 9 || b == 10 || b == 13)) {
-                        match String::from_utf8(data.to_vec()) {
-                            Ok(s) => format!("'{}'", s),
-                            Err(_) => hex::encode(data)
+                        "author" => {
+                            if let yara_x::MetaValue::String(s) = value {
+                                author = s.to_string();
+                            }
                         }
-                    } else {
-                        hex::encode(data)
-                    };
-                    
-                    matched_strings.push(format!("{}: {} @ {}", identifier, value_str, offset));
+                        "score" => {
+                            if let yara_x::MetaValue::Integer(i) = value {
+                                let s = i as i16;
+                                if s > 0 && s <= 100 {
+                                    score = s;
+                                }
+                            }
+                        }
+                        _ => {}
+                    }
                 }
-            }
-            
-            let mut match_message = format!("YARA-X match with rule {}", rule_id);
-            if !description.is_empty() {
-                match_message.push_str(&format!("\n         DESC: {}", description));
-            }
-            if !author.is_empty() {
-                match_message.push_str(&format!("\n         AUTHOR: {}", author));
-            }
-            if !matched_strings.is_empty() {
-                let mut strings_display = Vec::new();
-                for s in matched_strings.iter().take(3) {
-                    let truncated = if s.len() > 140 {
-                        format!("{}...", &s[..137])
-                    } else {
-                        s.clone()
-                    };
-                    strings_display.push(truncated);
+                
+                let mut matched_strings: Vec<String> = Vec::new();
+                for pattern in matching_rule.patterns() {
+                    for pattern_match in pattern.matches() {
+                        let identifier = pattern.identifier();
+                        let offset = pattern_match.range().start;
+                        let data = pattern_match.data();
+                        
+                        let value_str = if data.iter().all(|&b| b.is_ascii() && (b >= 32 || b == 9 || b == 10 || b == 13)) {
+                            match String::from_utf8(data.to_vec()) {
+                                Ok(s) => format!("'{}'", s),
+                                Err(_) => hex::encode(data)
+                            }
+                        } else {
+                            hex::encode(data)
+                        };
+                        
+                        matched_strings.push(format!("{}: {} @ {}", identifier, value_str, offset));
+                    }
                 }
-                match_message.push_str(&format!("\n         STRINGS: {}", strings_display.join(" ")));
-                if matched_strings.len() > 3 {
-                    match_message.push_str(&format!(" (and {} more)", matched_strings.len() - 3));
+                
+                let mut match_message = format!("YARA-X match with rule {}", rule_id);
+                if !description.is_empty() {
+                    match_message.push_str(&format!("\n         DESC: {}", description));
                 }
+                if !author.is_empty() {
+                    match_message.push_str(&format!("\n         AUTHOR: {}", author));
+                }
+                if !matched_strings.is_empty() {
+                    let mut strings_display = Vec::new();
+                    for s in matched_strings.iter().take(3) {
+                        let truncated = if s.len() > 140 {
+                            format!("{}...", &s[..137])
+                        } else {
+                            s.clone()
+                        };
+                        strings_display.push(truncated);
+                    }
+                    match_message.push_str(&format!("\n         STRINGS: {}", strings_display.join(" ")));
+                    if matched_strings.len() > 3 {
+                        match_message.push_str(&format!(" (and {} more)", matched_strings.len() - 3));
+                    }
+                }
+                
+                proc_matches.insert(
+                    proc_matches.len(), 
+                    GenMatch { message: match_message, score }
+                );
             }
-            
-            proc_matches.insert(
-                proc_matches.len(), 
-                GenMatch { message: match_message, score }
-            );
         }
     }
     
     // ------------------------------------------------------------
-    // C2 IOC Matching - Check process network connections
+    // 4. C2 IOC Matching - Check process network connections
     if !proc_matches.is_full() {
         let connections = get_process_connections(pid_u32);
         for (remote_ip, remote_port) in connections {
@@ -329,113 +417,176 @@ fn process_single_process(
     (processes_scanned, processes_matched, alert_count, warning_count, notice_count)
 }
 
-// Get network connections for a process (Linux-specific)
-// Reads from /proc/net/tcp and /proc/net/udp and matches by inode
-#[cfg(target_os = "linux")]
+// Cross-platform process connections using netstat2
 fn get_process_connections(pid: u32) -> Vec<(String, u16)> {
     let mut connections = Vec::new();
+    let af_flags = AddressFamilyFlags::IPV4 | AddressFamilyFlags::IPV6;
+    let proto_flags = ProtocolFlags::TCP | ProtocolFlags::UDP;
     
-    // Get process socket inodes from /proc/<pid>/fd
-    let fd_dir = format!("/proc/{}/fd", pid);
-    let mut socket_inodes = Vec::new();
-    
-    if let Ok(entries) = fs::read_dir(&fd_dir) {
-        for entry in entries {
-            if let Ok(entry) = entry {
-                let link_path = format!("/proc/{}/fd/{}", pid, entry.file_name().to_string_lossy());
-                if let Ok(link) = fs::read_link(&link_path) {
-                    let link_str = link.to_string_lossy();
-                    // Socket links look like "socket:[12345]"
-                    if link_str.starts_with("socket:[") && link_str.ends_with("]") {
-                        if let Some(inode_str) = link_str.strip_prefix("socket:[").and_then(|s| s.strip_suffix("]")) {
-                            if let Ok(inode) = inode_str.parse::<u64>() {
-                                socket_inodes.push(inode);
-                            }
-                        }
+    if let Ok(sockets) = get_sockets_info(af_flags, proto_flags) {
+        for socket in sockets {
+            if socket.associated_pids.contains(&pid) {
+                // Determine remote address
+                let (remote_ip, remote_port) = match socket.protocol_socket_info {
+                    netstat2::ProtocolSocketInfo::Tcp(tcp_info) => {
+                        (tcp_info.remote_addr.to_string(), tcp_info.remote_port)
+                    },
+                    netstat2::ProtocolSocketInfo::Udp(udp_info) => {
+                        // UDP is connectionless, but we can check for bound remote addresses if available
+                        // Often UDP sockets are 0.0.0.0:*
+                         continue; // Skip UDP for now as C2 matching usually targets specific remote TCP connections
                     }
+                };
+                
+                // Skip localhost and 0.0.0.0
+                if remote_ip != "0.0.0.0" && remote_ip != "127.0.0.1" && remote_ip != "::1" && remote_ip != "::" {
+                    connections.push((remote_ip, remote_port));
                 }
             }
         }
     }
-    
-    if socket_inodes.is_empty() {
-        return connections;
-    }
-    
-    // Read /proc/net/tcp
-    if let Ok(file) = fs::File::open("/proc/net/tcp") {
-        let reader = BufReader::new(file);
-        for line in reader.lines().skip(1) { // Skip header
-            if let Ok(line) = line {
-                let parts: Vec<&str> = line.split_whitespace().collect();
-                if parts.len() >= 10 {
-                    // Parse inode (last field)
-                    if let Ok(inode) = parts[9].parse::<u64>() {
-                        if socket_inodes.contains(&inode) {
-                            // Parse remote address (field 2: "IP:PORT" in hex)
-                            if let Some(remote_addr) = parse_tcp_address(parts[2]) {
-                                connections.push(remote_addr);
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-    
-    // Read /proc/net/udp (similar structure)
-    if let Ok(file) = fs::File::open("/proc/net/udp") {
-        let reader = BufReader::new(file);
-        for line in reader.lines().skip(1) { // Skip header
-            if let Ok(line) = line {
-                let parts: Vec<&str> = line.split_whitespace().collect();
-                if parts.len() >= 10 {
-                    if let Ok(inode) = parts[9].parse::<u64>() {
-                        if socket_inodes.contains(&inode) {
-                            if let Some(remote_addr) = parse_tcp_address(parts[2]) {
-                                connections.push(remote_addr);
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-    
     connections
 }
 
-#[cfg(not(target_os = "linux"))]
-fn get_process_connections(_pid: u32) -> Vec<(String, u16)> {
-    Vec::new()
+// Platform-specific memory reading
+#[cfg(target_os = "windows")]
+fn read_process_memory(pid: u32) -> Vec<u8> {
+    let mut buffer = Vec::new();
+    let max_buffer_size = 100 * 1024 * 1024; // 100 MB limit
+    
+    unsafe {
+        let handle = OpenProcess(
+            PROCESS_QUERY_INFORMATION | PROCESS_VM_READ, 
+            FALSE, 
+            pid
+        );
+        
+        if let Ok(handle) = handle {
+            if handle.is_invalid() {
+                return buffer;
+            }
+
+            let mut address: usize = 0;
+            let mut mem_info = MEMORY_BASIC_INFORMATION::default();
+            
+            while VirtualQueryEx(
+                handle, 
+                Some(address as *const c_void), 
+                &mut mem_info, 
+                std::mem::size_of::<MEMORY_BASIC_INFORMATION>()
+            ) != 0 {
+                // Check if we hit the limit
+                if buffer.len() >= max_buffer_size {
+                    break;
+                }
+                
+                // Only read committed memory
+                if mem_info.State == MEM_COMMIT && 
+                   (mem_info.Protect.0 & windows::Win32::System::Memory::PAGE_NOACCESS.0) == 0 &&
+                   (mem_info.Protect.0 & windows::Win32::System::Memory::PAGE_GUARD.0) == 0 {
+                    
+                    let mut chunk = vec![0u8; mem_info.RegionSize];
+                    let mut bytes_read: usize = 0;
+                    
+                    if ReadProcessMemory(
+                        handle, 
+                        mem_info.BaseAddress, 
+                        chunk.as_mut_ptr() as *mut c_void, 
+                        mem_info.RegionSize, 
+                        Some(&mut bytes_read)
+                    ).is_ok() {
+                        chunk.truncate(bytes_read);
+                        
+                        // Enforce remaining limit
+                        let remaining = max_buffer_size - buffer.len();
+                        if chunk.len() > remaining {
+                            chunk.truncate(remaining);
+                        }
+                        
+                        buffer.extend_from_slice(&chunk);
+                    }
+                }
+                
+                address = (mem_info.BaseAddress as usize) + mem_info.RegionSize;
+            }
+            
+            let _ = CloseHandle(handle);
+        }
+    }
+    
+    buffer
 }
 
-// Parse TCP/UDP address from /proc/net format: "AABBCCDD:PORT" (hex)
 #[cfg(target_os = "linux")]
-fn parse_tcp_address(addr_str: &str) -> Option<(String, u16)> {
-    let parts: Vec<&str> = addr_str.split(':').collect();
-    if parts.len() != 2 {
-        return None;
+fn read_process_memory(pid: u32) -> Vec<u8> {
+    let mut buffer = Vec::new();
+    let max_buffer_size = 100 * 1024 * 1024; // 100 MB limit
+    
+    // Parse /proc/{pid}/maps to find readable regions
+    let maps_path = format!("/proc/{}/maps", pid);
+    let mem_path = format!("/proc/{}/mem", pid);
+    
+    let maps_content = match fs::read_to_string(&maps_path) {
+        Ok(c) => c,
+        Err(_) => return buffer,
+    };
+    
+    let mut mem_file = match fs::File::open(&mem_path) {
+        Ok(f) => f,
+        Err(_) => return buffer,
+    };
+    
+    for line in maps_content.lines() {
+        if buffer.len() >= max_buffer_size {
+            break;
+        }
+        
+        // Line format: 00400000-00452000 r-xp 00000000 08:02 173521 /usr/bin/dbus-daemon
+        let parts: Vec<&str> = line.split_whitespace().collect();
+        if parts.len() < 2 { continue; }
+        
+        let range_str = parts[0];
+        let perms = parts[1];
+        
+        // Only read readable regions
+        if !perms.contains('r') { continue; }
+        // Skip shared memory or devices often causing I/O errors?
+        // Usually heap/stack are rw-p. Code is r-xp.
+        // We read everything readable.
+        
+        let ranges: Vec<&str> = range_str.split('-').collect();
+        if ranges.len() != 2 { continue; }
+        
+        let start_addr = match u64::from_str_radix(ranges[0], 16) {
+            Ok(a) => a,
+            Err(_) => continue,
+        };
+        let end_addr = match u64::from_str_radix(ranges[1], 16) {
+            Ok(a) => a,
+            Err(_) => continue,
+        };
+        
+        let size = end_addr - start_addr;
+        if size == 0 { continue; }
+        
+        // Limit chunk size to avoid huge allocations
+        let read_size = std::cmp::min(size, (max_buffer_size - buffer.len()) as u64) as usize;
+        if read_size == 0 { break; }
+        
+        let mut chunk = vec![0u8; read_size];
+        
+        if mem_file.seek(SeekFrom::Start(start_addr)).is_ok() {
+            if let Ok(bytes_read) = mem_file.read(&mut chunk) {
+                chunk.truncate(bytes_read);
+                buffer.extend_from_slice(&chunk);
+            }
+        }
     }
     
-    // Parse IP (hex format: AABBCCDD = DD.CC.BB.AA)
-    let ip_hex = parts[0];
-    if ip_hex.len() != 8 {
-        return None;
-    }
-    
-    // Convert hex to IP address
-    let ip_bytes: Vec<u8> = (0..4)
-        .map(|i| {
-            let start = (3 - i) * 2;
-            u8::from_str_radix(&ip_hex[start..start + 2], 16).unwrap_or(0)
-        })
-        .collect();
-    
-    let ip = format!("{}.{}.{}.{}", ip_bytes[0], ip_bytes[1], ip_bytes[2], ip_bytes[3]);
-    
-    // Parse port (hex)
-    let port = u16::from_str_radix(parts[1], 16).ok()?;
-    
-    Some((ip, port))
+    buffer
+}
+
+#[cfg(not(any(target_os = "windows", target_os = "linux")))]
+fn read_process_memory(_pid: u32) -> Vec<u8> {
+    Vec::new()
 }
