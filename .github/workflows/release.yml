@@ -92,8 +92,13 @@ jobs:
       - name: Strip binary (Linux/macOS)
         if: runner.os != 'Windows'
         run: |
-          strip target/${{ matrix.target }}/release/${{ matrix.binary_name }}
-          strip target/${{ matrix.target }}/release/loki-util
+          if [ "${{ matrix.target }}" = "aarch64-unknown-linux-gnu" ]; then
+            aarch64-linux-gnu-strip target/${{ matrix.target }}/release/${{ matrix.binary_name }}
+            aarch64-linux-gnu-strip target/${{ matrix.target }}/release/loki-util
+          else
+            strip target/${{ matrix.target }}/release/${{ matrix.binary_name }}
+            strip target/${{ matrix.target }}/release/loki-util
+          fi
 
       - name: Fetch signatures
         shell: bash
@@ -108,37 +113,43 @@ jobs:
           # Verify signatures were downloaded
           ls -R signatures
 
-      - name: Create release archive
+      - name: Create release archive (Linux/macOS)
+        if: runner.os != 'Windows'
         shell: bash
         run: |
           VERSION=${GITHUB_REF#refs/tags/}
           ARCHIVE_NAME="${{ matrix.artifact_name }}-${VERSION}.${{ matrix.archive_format }}"
           
-          # Determine util binary name
-          if [[ "${{ matrix.binary_name }}" == *".exe" ]]; then
-            UTIL_BINARY_NAME="loki-util.exe"
-          else
-            UTIL_BINARY_NAME="loki-util"
-          fi
+          UTIL_BINARY_NAME="loki-util"
           
-          # Create a staging directory
           mkdir -p staging
           cp target/${{ matrix.target }}/release/${{ matrix.binary_name }} staging/
           cp target/${{ matrix.target }}/release/$UTIL_BINARY_NAME staging/
           cp -r signatures staging/
           
-          if [ "${{ matrix.archive_format }}" = "tar.gz" ]; then
-            cd staging
-            tar czf "../${ARCHIVE_NAME}" *
-            cd ..
-          else
-            cd staging
-            zip -r "../${ARCHIVE_NAME}" *
-            cd ..
-          fi
+          cd staging
+          tar czf "../${ARCHIVE_NAME}" *
+          cd ..
           
           echo "ARCHIVE_NAME=${ARCHIVE_NAME}" >> $GITHUB_ENV
           echo "BINARY_NAME=${{ matrix.binary_name }}" >> $GITHUB_ENV
+
+      - name: Create release archive (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $VERSION = "${{ github.ref }}".Replace("refs/tags/", "")
+          $ARCHIVE_NAME = "${{ matrix.artifact_name }}-${VERSION}.${{ matrix.archive_format }}"
+          
+          New-Item -ItemType Directory -Path staging -Force
+          Copy-Item "target/${{ matrix.target }}/release/${{ matrix.binary_name }}" -Destination staging/
+          Copy-Item "target/${{ matrix.target }}/release/loki-util.exe" -Destination staging/
+          Copy-Item -Recurse signatures -Destination staging/
+          
+          Compress-Archive -Path staging/* -DestinationPath $ARCHIVE_NAME
+          
+          echo "ARCHIVE_NAME=${ARCHIVE_NAME}" >> $env:GITHUB_ENV
+          echo "BINARY_NAME=${{ matrix.binary_name }}" >> $env:GITHUB_ENV
 
       - name: Generate checksums (Linux/macOS)
         if: runner.os != 'Windows'
