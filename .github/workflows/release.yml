@@ -103,15 +103,7 @@ jobs:
       - name: Fetch signatures
         shell: bash
         run: |
-          # Use loki-util to fetch signatures
-          # We need to make it executable first (already done for Linux/macOS by cargo, but good to be sure)
-          chmod +x target/${{ matrix.target }}/release/loki-util || true
-          
-          # Create signatures directory in the current workspace
-          ./target/${{ matrix.target }}/release/loki-util update
-          
-          # Verify signatures were downloaded
-          ls -R signatures
+          git clone --depth 1 https://github.com/Neo23x0/signature-base.git signatures
 
       - name: Create release archive (Linux/macOS)
         if: runner.os != 'Windows'
@@ -139,7 +131,7 @@ jobs:
         shell: pwsh
         run: |
           $VERSION = "${{ github.ref }}".Replace("refs/tags/", "")
-          $ARCHIVE_NAME = "${{ matrix.artifact_name }}-${VERSION}.${{ matrix.archive_format }}"
+          $ARCHIVE_NAME = "${{ matrix.artifact_name }}-$VERSION.${{ matrix.archive_format }}"
           
           New-Item -ItemType Directory -Path staging -Force
           Copy-Item "target/${{ matrix.target }}/release/${{ matrix.binary_name }}" -Destination staging/
@@ -148,8 +140,8 @@ jobs:
           
           Compress-Archive -Path staging/* -DestinationPath $ARCHIVE_NAME
           
-          echo "ARCHIVE_NAME=${ARCHIVE_NAME}" >> $env:GITHUB_ENV
-          echo "BINARY_NAME=${{ matrix.binary_name }}" >> $env:GITHUB_ENV
+          "ARCHIVE_NAME=$ARCHIVE_NAME" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "BINARY_NAME=${{ matrix.binary_name }}" | Out-File -FilePath $env:GITHUB_ENV -Append
 
       - name: Generate checksums (Linux/macOS)
         if: runner.os != 'Windows'
@@ -162,9 +154,9 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          $hash = Get-FileHash -Path "${ARCHIVE_NAME}" -Algorithm SHA256
-          $hash.Hash | Out-File -FilePath "${ARCHIVE_NAME}.sha256" -Encoding ASCII
-          echo "CHECKSUM_FILE=${ARCHIVE_NAME}.sha256" >> $env:GITHUB_ENV
+          $hash = Get-FileHash -Path $env:ARCHIVE_NAME -Algorithm SHA256
+          "$($hash.Hash)  $env:ARCHIVE_NAME" | Out-File -FilePath "$env:ARCHIVE_NAME.sha256" -Encoding ASCII
+          "CHECKSUM_FILE=$env:ARCHIVE_NAME.sha256" | Out-File -FilePath $env:GITHUB_ENV -Append
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
