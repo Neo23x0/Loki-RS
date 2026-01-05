@@ -79,5 +79,5 @@ jobs:
       with:
         upload_url: ${{ github.event.release.upload_url }}
         asset_path: ./dist/loki.zip
-        asset_name: loki2-windows.zip
+        asset_name: loki-rs-windows.zip
         asset_content_type: application/zip

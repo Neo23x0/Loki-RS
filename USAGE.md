@@ -1,6 +1,6 @@
-# LOKI2 Usage Guide
+# Loki-RS Usage Guide
 
-LOKI2 is a simple IOC (Indicators of Compromise) and YARA scanner written in Rust.
+Loki-RS is a simple IOC (Indicators of Compromise) and YARA scanner written in Rust.
 
 ## Quick Start
 
@@ -19,7 +19,7 @@ LOKI2 is a simple IOC (Indicators of Compromise) and YARA scanner written in Rus
    - Configuration files (`config/`)
    - This usage guide
 
-3. **Run LOKI2:**
+3. **Run Loki-RS:**
    ```bash
    ./build/loki --help
    ```
@@ -29,7 +29,7 @@ LOKI2 is a simple IOC (Indicators of Compromise) and YARA scanner written in Rus
 ```
 Usage: loki [OPTIONS]
 
-LOKI YARA and IOC Scanner
+Loki-RS YARA and IOC Scanner
 
 Options:
   -m, --max-file-size         Maximum file size to scan (default: 10000000)
@@ -77,7 +77,7 @@ Options:
 
 ## Signatures
 
-LOKI2 uses YARA rules and IOC files for detection. Signatures are located in the `signatures/` directory:
+Loki-RS uses YARA rules and IOC files for detection. Signatures are located in the `signatures/` directory:
 
 - **YARA rules**: Place `.yar` files in `signatures/yara/`
 - **Hash IOCs**: Place hash IOC files in `signatures/iocs/` (files containing "hash" in the name)
@@ -121,7 +121,7 @@ Example `config/excludes.cfg`:
 
 ## Output Levels
 
-LOKI2 uses a scoring system to determine the severity of matches:
+Loki-RS uses a scoring system to determine the severity of matches:
 
 - **ALERT**: High severity matches (default threshold: 75)
 - **WARNING**: Medium severity matches (default threshold: 50)
@@ -131,7 +131,7 @@ Matches are scored based on YARA rule metadata and IOC scores, with weighted sco
 
 ## Logging
 
-LOKI2 supports multiple log levels:
+Loki-RS supports multiple log levels:
 
 - **Default**: Shows ALERT, WARNING, and NOTICE messages
 - **Debug** (`-d`): Shows additional debugging information

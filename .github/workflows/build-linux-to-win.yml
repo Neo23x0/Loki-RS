@@ -1,4 +1,4 @@
-name: LOKI2 Build Win on Linux
+name: Loki-RS Build Win on Linux
 
 on:
   push:

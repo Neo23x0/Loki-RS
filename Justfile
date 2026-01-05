@@ -1,4 +1,4 @@
-# LOKI2 Build System - Justfile
+# Loki-RS Build System - Justfile
 # Modern command runner alternative to Makefile
 # Install: cargo install just
 # Usage: just <command>
@@ -41,7 +41,7 @@ package: build install-signatures
     if [ -f USAGE.md ]; then
         cp USAGE.md build/
     else
-        echo "# LOKI2 Usage Guide" > build/USAGE.md
+        echo "# Loki-RS Usage Guide" > build/USAGE.md
         echo "" >> build/USAGE.md
         echo "See README.md for usage instructions." >> build/USAGE.md
     fi
@@ -50,7 +50,7 @@ package: build install-signatures
     if [ -f config/excludes.cfg.example ]; then
         cp config/excludes.cfg.example build/config/excludes.cfg
     else
-        echo "# LOKI2 Exclusions Configuration" > build/config/excludes.cfg
+        echo "# Loki-RS Exclusions Configuration" > build/config/excludes.cfg
     fi
     
     # Copy LICENSE

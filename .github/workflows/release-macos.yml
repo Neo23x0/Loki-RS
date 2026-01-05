@@ -36,5 +36,5 @@ jobs:
       with:
         upload_url: ${{ github.event.release.upload_url }}
         asset_path: ./dist/loki.zip
-        asset_name: loki2-macos.zip
+        asset_name: loki-rs-macos.zip
         asset_content_type: application/zip

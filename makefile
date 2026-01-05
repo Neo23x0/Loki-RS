@@ -1,5 +1,5 @@
-# LOKI2 Build System
-# Enhanced Makefile for building and packaging LOKI2
+# Loki-RS Build System
+# Enhanced Makefile for building and packaging Loki-RS
 
 .DEFAULT_GOAL := help
 
@@ -11,9 +11,9 @@ SIGNATURES_DIR := $(BUILD_DIR)/signatures
 CONFIG_DIR := $(BUILD_DIR)/config
 
 ifeq ($(OS),Windows_NT)
-	# LOKI2 can't be built on Windows!
-	# For information on how to build LOKI2 for Windows see the workflow file in .github/workflows/build-linux-to-win.yml
-	$(error LOKI2 cannot be built natively on Windows. Use cross-compilation from Linux.)
+	# Loki-RS can't be built on Windows!
+	# For information on how to build Loki-RS for Windows see the workflow file in .github/workflows/build-linux-to-win.yml
+	$(error Loki-RS cannot be built natively on Windows. Use cross-compilation from Linux.)
 else
 	UNAME_S := $(shell uname -s)
 	ifeq ($(UNAME_S),Linux)
@@ -28,7 +28,7 @@ endif
 .PHONY: help build clean package install-signatures
 
 help: ## Show this help message
-	@echo "LOKI2 Build System"
+	@echo "Loki-RS Build System"
 	@echo ""
 	@echo "Available targets:"
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-15s\033[0m %s\n", $$1, $$2}'
@@ -101,9 +101,9 @@ package: build fetch-signatures install-signatures ## Create a complete build pa
 	fi
 	@echo "[+] Creating usage guide ..."
 	@cp USAGE.md $(BUILD_DIR)/ 2>/dev/null || echo "[!] USAGE.md not found, creating from template..."
-	@test -f $(BUILD_DIR)/USAGE.md || echo "# LOKI2 Usage Guide\n\nSee README.md for usage instructions." > $(BUILD_DIR)/USAGE.md
+	@test -f $(BUILD_DIR)/USAGE.md || echo "# Loki-RS Usage Guide\n\nSee README.md for usage instructions." > $(BUILD_DIR)/USAGE.md
 	@echo "[+] Creating config files ..."
-	@test -f $(CONFIG_DIR)/excludes.cfg || cp config/excludes.cfg.example $(CONFIG_DIR)/excludes.cfg 2>/dev/null || echo "# LOKI2 Exclusions Configuration\n# Add regex patterns here, one per line\n# Example: ^/proc/.*" > $(CONFIG_DIR)/excludes.cfg
+	@test -f $(CONFIG_DIR)/excludes.cfg || cp config/excludes.cfg.example $(CONFIG_DIR)/excludes.cfg 2>/dev/null || echo "# Loki-RS Exclusions Configuration\n# Add regex patterns here, one per line\n# Example: ^/proc/.*" > $(CONFIG_DIR)/excludes.cfg
 	@echo "[+] Copying LICENSE ..."
 	@cp LICENSE $(BUILD_DIR)/ 2>/dev/null || echo "[!] LICENSE not found"
 	@echo ""
@@ -197,7 +197,7 @@ dist: build fetch-signatures ## Create distribution package (downloads signature
 	@test -f USAGE.md && cp USAGE.md ./dist/loki/ || true
 	@echo "[+] Creating config directory ..."
 	@mkdir -p ./dist/loki/config
-	@test -f config/excludes.cfg.example && cp config/excludes.cfg.example ./dist/loki/config/excludes.cfg || echo "# LOKI2 Exclusions Configuration" > ./dist/loki/config/excludes.cfg
+	@test -f config/excludes.cfg.example && cp config/excludes.cfg.example ./dist/loki/config/excludes.cfg || echo "# Loki-RS Exclusions Configuration" > ./dist/loki/config/excludes.cfg
 	@rm -rf ./tmp
 	@echo "[✓] Distribution package created in ./dist/loki/"
 

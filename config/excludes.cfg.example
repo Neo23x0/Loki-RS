@@ -1,4 +1,4 @@
-# LOKI2 Exclusions Configuration
+# Loki-RS Exclusions Configuration
 # 
 # This file contains regular expressions that are applied to file paths
 # during scanning. Each line represents a regex pattern that will exclude

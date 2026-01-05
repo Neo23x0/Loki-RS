@@ -1,4 +1,4 @@
-name: LOKI2 Build Linux
+name: Loki-RS Build Linux
 
 on:
   push:

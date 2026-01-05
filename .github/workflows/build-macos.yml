@@ -1,4 +1,4 @@
-name: LOKI2 Build macOS
+name: Loki-RS Build macOS
 
 on:
   push:

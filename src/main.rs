@@ -797,7 +797,7 @@ fn main() {
 
     // Parsing command line flags
     let (args, _rest) = opts! {
-        synopsis "LOKI YARA and IOC Scanner";
+        synopsis "Loki-RS YARA and IOC Scanner";
         opt cpu_limit:u8=100, desc:"CPU utilization limit percentage (1-100, default: 100)";
         opt max_file_size:usize=64_000_000, desc:"Maximum file size to scan (default: 64MB)";
         opt show_access_errors:bool, desc:"Show all file and process access errors";
@@ -819,7 +819,7 @@ fn main() {
     
     // Handle version flag
     if args.version {
-        println!("LOKI Version {} (Rust)", VERSION);
+        println!("Loki-RS Version {} (Rust)", VERSION);
         std::process::exit(0);
     }
     
@@ -861,7 +861,7 @@ fn main() {
         .append()
         .start()
         .unwrap();
-    log::info!("LOKI scan started VERSION: {}", VERSION);
+    log::info!("Loki-RS scan started VERSION: {}", VERSION);
 
     // Configure thread pool
     match ThreadPoolBuilder::new().num_threads(num_threads).build_global() {
@@ -994,7 +994,7 @@ fn main() {
     let duration = end_time.signed_duration_since(start_time);
     
     // Print summary
-    log::info!("LOKI scan finished");
+    log::info!("Loki-RS scan finished");
     log::info!("Summary - Files scanned: {} Matched: {} | Processes scanned: {} Matched: {} | Alerts: {} Warnings: {} Notices: {}", 
         files_scanned, files_matched,
         proc_scanned, proc_matched,

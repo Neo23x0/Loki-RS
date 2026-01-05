@@ -27,12 +27,12 @@ fn main() {
             println!("[✓] Signatures updated successfully!");
         }
         "upgrade" => {
-            println!("[+] Upgrading LOKI2...");
+            println!("[+] Upgrading Loki-RS...");
             if let Err(e) = upgrade_loki() {
-                eprintln!("[!] Error upgrading LOKI2: {}", e);
+                eprintln!("[!] Error upgrading Loki-RS: {}", e);
                 std::process::exit(1);
             }
-            println!("[✓] LOKI2 upgraded successfully!");
+            println!("[✓] Loki-RS upgraded successfully!");
         }
         _ => {
             eprintln!("[!] Unknown command: {}", command);
@@ -43,13 +43,13 @@ fn main() {
 }
 
 fn print_usage() {
-    println!("LOKI2 Utility Tool");
+    println!("Loki-RS Utility Tool");
     println!();
     println!("Usage: loki-util <command>");
     println!();
     println!("Commands:");
     println!("  update   - Update signatures (IOCs and YARA rules)");
-    println!("  upgrade  - Update LOKI2 program and signatures");
+    println!("  upgrade  - Update Loki-RS program and signatures");
     println!();
 }
 
@@ -213,7 +213,7 @@ fn upgrade_loki() -> Result<(), Box<dyn std::error::Error>> {
         .status();
     
     if git_status.is_ok() && git_status.unwrap().success() {
-        println!("[+] Updating LOKI2 from git repository...");
+        println!("[+] Updating Loki-RS from git repository...");
         
         // Fetch latest changes
         let status = Command::new("git")
@@ -240,22 +240,22 @@ fn upgrade_loki() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
         
-        println!("[+] LOKI2 code updated from git");
+        println!("[+] Loki-RS code updated from git");
         
         // Rebuild
-        println!("[+] Rebuilding LOKI2...");
+        println!("[+] Rebuilding Loki-RS...");
         let status = Command::new("cargo")
             .args(&["build", "--release"])
             .status()?;
         
         if !status.success() {
-            return Err("Failed to rebuild LOKI2".into());
+            return Err("Failed to rebuild Loki-RS".into());
         }
         
-        println!("[+] LOKI2 rebuilt successfully");
+        println!("[+] Loki-RS rebuilt successfully");
     } else {
         println!("[!] Not in a git repository. Skipping code update.");
-        println!("[!] Please update LOKI2 manually if needed.");
+        println!("[!] Please update Loki-RS manually if needed.");
     }
     
     // Update signatures
