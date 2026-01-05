@@ -747,7 +747,7 @@ fn log_cmdline_format(
         log::Level::Error => {
             if msg.starts_with("ALERT") {
                 let clean_msg = msg.trim_start_matches("ALERT").trim();
-                format!("[ALERT] {}", clean_msg).red()
+                format!("{} {}", "[ALERT]".black().on_red(), clean_msg.red()).normal()
             } else {
                 format!("[{}] {}", level, msg).purple()
             }
@@ -755,7 +755,7 @@ fn log_cmdline_format(
         log::Level::Warn => {
             if msg.starts_with("WARNING") {
                 let clean_msg = msg.trim_start_matches("WARNING").trim();
-                format!("[WARNING] {}", clean_msg).yellow()
+                format!("{} {}", "[WARNING]".black().on_yellow(), clean_msg.yellow()).normal()
             } else {
                 format!("[{}] {}", level, msg).yellow()
             }
