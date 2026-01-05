@@ -625,28 +625,38 @@ fn process_file_entry(
         let shown_reasons: Vec<&GenMatch> = sample_matches.iter().take(reasons_to_show).collect();
         
         // Format output
-        let mut output = format!("FILE: {}\n      {}: {:.0} {}: {} {}: {}\n", 
-            entry.path().display(),
-            "SCORE".red(),
+        let colorize = |s: &str| -> ColoredString {
+            match message_level {
+                "ALERT" => s.red(),
+                "WARNING" => s.yellow(),
+                "NOTICE" => s.cyan(),
+                _ => s.normal(),
+            }
+        };
+
+        let mut output = format!("{}: {}\n      {}: {} {}: {} {}: {}\n", 
+            colorize("FILE"),
+            entry.path().display().to_string().white(),
+            colorize("SCORE"),
             total_score.round().to_string().white(),
-            "TYPE".red(),
+            colorize("TYPE"),
             file_format_desc.white(),
-            "SIZE".red(),
+            colorize("SIZE"),
             realsize.to_string().white());
         
         // Add hash info
         output.push_str(&format!("      {}: {}\n      {}: {}\n      {}: {}\n", 
-            "MD5".red(), sample_info.md5.white(), 
-            "SHA1".red(), sample_info.sha1.white(), 
-            "SHA256".red(), sample_info.sha256.white()));
+            colorize("MD5"), sample_info.md5.white(), 
+            colorize("SHA1"), sample_info.sha1.white(), 
+            colorize("SHA256"), sample_info.sha256.white()));
         
         // Add reasons
         for (i, reason) in shown_reasons.iter().enumerate() {
             output.push_str(&format!("      {}_{}: {}\n         {}: {}\n", 
-                "REASON".red(), 
+                colorize("REASON"), 
                 i + 1, 
                 reason.message.white(), 
-                "SUBSCORE".red(), 
+                colorize("SUBSCORE"), 
                 reason.score.to_string().white()));
         }
         

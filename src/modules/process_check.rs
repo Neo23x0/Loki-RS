@@ -375,19 +375,29 @@ fn process_single_process(
         let reasons_to_show = std::cmp::min(proc_matches.len(), scan_config.max_reasons);
         let shown_reasons: Vec<&GenMatch> = proc_matches.iter().take(reasons_to_show).collect();
         
-        let mut output = format!("PID: {} {}: {}\n      {}: {:.0}\n", 
-            pid_u32, 
-            "PROC_NAME".red(),
+        let colorize = |s: &str| -> ColoredString {
+            match message_level {
+                "ALERT" => s.red(),
+                "WARNING" => s.yellow(),
+                "NOTICE" => s.cyan(),
+                _ => s.normal(),
+            }
+        };
+
+        let mut output = format!("{}: {} {}: {}\n      {}: {}\n", 
+            colorize("PID"),
+            pid_u32.to_string().white(),
+            colorize("PROC_NAME"),
             proc_name_str.white(), 
-            "SCORE".red(),
+            colorize("SCORE"),
             total_score.round().to_string().white());
         
         for (i, reason) in shown_reasons.iter().enumerate() {
             output.push_str(&format!("      {}_{}: {} {}: {}\n", 
-                "REASON".red(), 
+                colorize("REASON"), 
                 i + 1, 
                 reason.message.white(), 
-                "SUBSCORE".red(),
+                colorize("SUBSCORE"),
                 reason.score.to_string().white()));
         }
         
