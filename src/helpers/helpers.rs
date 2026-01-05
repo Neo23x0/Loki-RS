@@ -78,6 +78,15 @@ pub fn parse_size_string(size_str: &str) -> Result<usize, String> {
     Ok(num * multiplier)
 }
 
+// Helper for consistent error logging
+pub fn log_access_error(path: &str, error: &dyn std::fmt::Debug, show_trace: bool) {
+    if show_trace {
+        log::error!("Cannot access object PATH: {} ERROR: {:?}", path, error);
+    } else {
+        log::debug!("Cannot access object PATH: {} ERROR: {:?}", path, error);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
