@@ -21,7 +21,7 @@ jobs:
       PKG_CONFIG_PATH: /usr/x86_64-linux-musl/lib/pkgconfig
 
     steps:
-    - uses: actions/checkout@v3
+    - uses: actions/checkout@v6
 
     - name: Install Dependencies
       run: | 
