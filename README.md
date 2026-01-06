@@ -180,6 +180,10 @@ For detailed build instructions, including cross-compilation, see [docs/BUILD.md
 *   [Score Calculation](docs/score_calculation.md): Explanation of the scoring formula.
 *   [Parity Matrix](docs/parity_matrix.md): Comparison with Loki v1.
 
+## 🖥️ Screenshots
+
+![Loki Screenshot](./images/loki-screen-1.png)
+
 ## ⚖️ License
 
 Loki-RS is open-source software licensed under the [GNU General Public License v3.0](LICENSE).

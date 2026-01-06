@@ -75,6 +75,7 @@ pub fn scan_processes(
     }
 
     let cpu_limit = scan_config.cpu_limit;
+    let own_pid = process::id();
 
     // Refresh the process information
     let mut sys = System::new_all();
@@ -83,6 +84,7 @@ pub fn scan_processes(
     // Process in parallel
     let (processes_scanned, processes_matched, alert_count, warning_count, notice_count) = sys.processes()
         .par_iter()
+        .filter(|(pid, _)| pid.as_u32() != own_pid)
         .map(|(pid, process)| {
             init_thread_throttler(cpu_limit);
             throttle_start();
@@ -132,12 +134,9 @@ fn process_single_process(
     let mut warning_count = 0;
     let mut notice_count = 0;
 
-    // Get LOKI's own process
-    let own_pid = process::id();
     let pid_u32 = pid.as_u32();
     let proc_name = process.name();
-    // Skip some processes
-    if pid_u32 == own_pid { return (0, 0, 0, 0, 0); }  // skip LOKI's own process
+    
     // Convert process name to string for logging
     let proc_name_str = proc_name.to_string_lossy().to_string();
     // Debug output : show every file that gets scanned
