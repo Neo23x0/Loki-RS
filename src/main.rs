@@ -21,7 +21,7 @@ use crate::modules::filesystem_scan::FileScanModule;
 // Specific TODOs
 // - better error handling
 
-const VERSION: &str = "2.2.0-alpha";
+const VERSION: &str = "2.3.0-beta";
 
 const SIGNATURE_SOURCE: &str = "./signatures";
 const MODULES: &'static [&'static str] = &["FileScan", "ProcessCheck"];

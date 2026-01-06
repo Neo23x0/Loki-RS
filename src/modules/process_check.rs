@@ -1,7 +1,8 @@
 use std::process;
+use std::collections::HashMap;
 use arrayvec::ArrayVec;
 use yara_x::{Scanner, Rules};
-use sysinfo::{System, Pid, Process};
+use sysinfo::{System, Pid, Process, Uid, Users};
 use hex;
 use rayon::prelude::*;
 use colored::*;
@@ -81,6 +82,13 @@ pub fn scan_processes(
     let mut sys = System::new_all();
     sys.refresh_all();
     
+    // Create user map
+    let users = Users::new_with_refreshed_list();
+    let mut user_map: HashMap<Uid, String> = HashMap::new();
+    for user in &users {
+        user_map.insert(user.id().clone(), user.name().to_string());
+    }
+    
     // Process in parallel
     let (processes_scanned, processes_matched, alert_count, warning_count, notice_count) = sys.processes()
         .par_iter()
@@ -91,6 +99,7 @@ pub fn scan_processes(
             let result = process_single_process(
                 pid, 
                 process, 
+                &user_map,
                 compiled_rules, 
                 scan_config, 
                 c2_iocs, 
@@ -120,6 +129,7 @@ pub fn scan_processes(
 fn process_single_process(
     pid: &Pid, 
     process: &Process, 
+    user_map: &HashMap<Uid, String>,
     compiled_rules: &Rules, 
     scan_config: &ScanConfig, 
     c2_iocs: &[C2IOC], 
@@ -139,7 +149,26 @@ fn process_single_process(
     
     // Convert process name to string for logging
     let proc_name_str = proc_name.to_string_lossy().to_string();
-    // Debug output : show every file that gets scanned
+    
+    // Gather process details
+    let path = process.exe().map(|p| p.to_string_lossy()).unwrap_or_default();
+    let cmd_line = process.cmd().iter().map(|s| s.to_string_lossy()).collect::<Vec<_>>().join(" ");
+    let user_id = process.user_id();
+    let username = user_id.and_then(|uid| user_map.get(uid)).map(|s| s.as_str()).unwrap_or("unknown");
+    let ppid = process.parent().map(|p| p.as_u32().to_string()).unwrap_or("0".to_string());
+    let start_time = process.start_time();
+    let memory = process.memory();
+    let status = format!("{:?}", process.status());
+    let cwd = process.cwd().map(|p| p.to_string_lossy()).unwrap_or_default();
+    let root = process.root().map(|p| p.to_string_lossy()).unwrap_or_default();
+
+    // Log detailed process info at INFO level as requested
+    log::info!("ANALYZED_PROCESS PID: {} PPID: {} NAME: {:?} PATH: {:?} CMD: {:?} USER: {:?} UID: {:?} START: {} MEM: {} STATUS: {:?} CWD: {:?} ROOT: {:?}",
+        pid_u32, ppid, proc_name_str, path, cmd_line, username, user_id.map(|u| u.to_string()).unwrap_or_default(),
+        start_time, memory, status, cwd, root
+    );
+
+    // Debug output
     log::debug!("Trying to scan process PID: {} PROC_NAME: {}", pid_u32, proc_name_str);
     
     // Count this as a process we attempted to scan
