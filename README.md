@@ -1,3 +1,5 @@
+![Loki RS Logo](./images/loki-logo.png)
+
 # Loki-RS
 
 **Loki-RS** is a complete rewrite of the popular [Loki IOC and YARA Scanner](https://github.com/Neo23x0/Loki) in Rust. It is designed for performance, reliability, and ease of deployment, providing a single-binary solution for scanning systems for Indicators of Compromise (IOCs).
