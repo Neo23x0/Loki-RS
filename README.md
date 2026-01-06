@@ -162,11 +162,11 @@ If you want to contribute or build the latest version yourself:
 git clone https://github.com/Neo23x0/Loki-RS.git
 cd Loki-RS
 
-# 2. Get signatures
-git clone https://github.com/Neo23x0/signature-base signatures
-
-# 3. Build for release
+# 2. Build for release
 cargo build --release
+
+# 3. Get signatures
+./target/release/loki-util update
 
 # 4. Run
 sudo ./target/release/loki

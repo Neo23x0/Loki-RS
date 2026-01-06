@@ -61,26 +61,24 @@ cargo install cargo-audit
    cd Loki-RS
    ```
 
-2. **Link Signature Base** (if available)
+2. **Build Release Version**
    ```bash
-   # Option 1: Clone signature-base as submodule 
-   git submodule update --init --recursive
-   
-   # Option 2: Symlink existing signature-base
-   ln -s /path/to/signature-base ./signatures
+   cargo build --release
    ```
+   Main binary: `target/release/loki`
+   Utility binary: `target/release/loki-util`
 
-3. **Build Debug Version**
+3. **Fetch Signatures**
+   ```bash
+   ./target/release/loki-util update
+   ```
+   This downloads the latest signatures to `./signatures`.
+
+4. **Build Debug Version** (Optional)
    ```bash
    cargo build
    ```
    Binary will be at: `target/debug/loki`
-
-4. **Build Release Version** (optimized)
-   ```bash
-   cargo build --release
-   ```
-   Binary will be at: `target/release/loki`
 
 5. **Run Tests**
    ```bash

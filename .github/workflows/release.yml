@@ -219,18 +219,12 @@ jobs:
             - Checksum: `loki-macos-aarch64-${{ steps.version.outputs.VERSION }}.tar.gz.sha256`
             
             ### Installation
-            
             1. Download the appropriate binary for your platform
             2. Extract the archive
-            3. Make binary executable (Linux/macOS): `chmod +x loki`
-            4. Run: `./loki --help`
-            
-            ### Signature Base
-            
-            You'll need to link or clone the signature-base repository:
-            ```bash
-            git clone https://github.com/Neo23x0/signature-base.git signatures
-            ```
+            3. Make binary executable (Linux/macOS): chmod +x loki
+            4. Run: ./loki-util update (to download newest signatures from YARA-Forge)
+            5. Run: ./loki --help
+
           files: |
             artifacts/**/*
           draft: false
