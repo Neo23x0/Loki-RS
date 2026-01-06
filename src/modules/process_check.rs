@@ -1,5 +1,6 @@
 use std::process;
 use std::collections::HashMap;
+use std::sync::Arc;
 use arrayvec::ArrayVec;
 use yara_x::{Scanner, Rules};
 use sysinfo::{System, Pid, Process, Uid, Users};
@@ -36,6 +37,7 @@ use crate::helpers::score::calculate_weighted_score;
 use crate::helpers::jsonl_logger::{JsonlLogger, MatchReason};
 use crate::helpers::remote_logger::RemoteLogger;
 use crate::helpers::throttler::{init_thread_throttler, throttle_start, throttle_end};
+use crate::helpers::interrupt::ScanState;
 
 use crate::modules::{ScanModule, ScanContext, ModuleResult};
 
@@ -54,7 +56,8 @@ impl ScanModule for ProcessCheckModule {
             context.filename_iocs,
             context.hash_collections,
             context.jsonl_logger,
-            context.remote_logger
+            context.remote_logger,
+            context.scan_state.as_ref()
         )
     }
 }
@@ -67,7 +70,8 @@ pub fn scan_processes(
     filename_iocs: &Vec<FilenameIOC>,
     hash_collections: &HashIOCCollections,
     jsonl_logger: Option<&JsonlLogger>, 
-    remote_logger: Option<&RemoteLogger>
+    remote_logger: Option<&RemoteLogger>,
+    scan_state: Option<&Arc<ScanState>>
 ) -> (usize, usize, usize, usize, usize) {
     
     // Warn if platform is not fully supported for memory scanning
@@ -106,7 +110,8 @@ pub fn scan_processes(
                 filename_iocs,
                 hash_collections,
                 jsonl_logger, 
-                remote_logger
+                remote_logger,
+                scan_state
             );
             throttle_end();
             result
@@ -136,7 +141,8 @@ fn process_single_process(
     filename_iocs: &Vec<FilenameIOC>,
     hash_collections: &HashIOCCollections,
     jsonl_logger: Option<&JsonlLogger>,
-    remote_logger: Option<&RemoteLogger>
+    remote_logger: Option<&RemoteLogger>,
+    scan_state: Option<&Arc<ScanState>>
 ) -> (usize, usize, usize, usize, usize) {
     let mut processes_scanned = 0;
     let mut processes_matched = 0;
@@ -149,24 +155,38 @@ fn process_single_process(
     
     // Convert process name to string for logging
     let proc_name_str = proc_name.to_string_lossy().to_string();
+
+    // Check interrupt state
+    if let Some(state) = scan_state {
+        if state.should_stop() {
+            return (0, 0, 0, 0, 0);
+        }
+        state.wait_for_resume(); // Wait if menu is active
+        if state.should_stop() {
+            return (0, 0, 0, 0, 0);
+        }
+        state.set_current_element(format!("Process: {} (PID: {})", proc_name_str, pid_u32));
+        state.increment_processes();
+    }
     
     // Gather process details
-    let path = process.exe().map(|p| p.to_string_lossy()).unwrap_or_default();
+
     let cmd_line = process.cmd().iter().map(|s| s.to_string_lossy()).collect::<Vec<_>>().join(" ");
     let user_id = process.user_id();
     let username = user_id.and_then(|uid| user_map.get(uid)).map(|s| s.as_str()).unwrap_or("unknown");
     let ppid = process.parent().map(|p| p.as_u32().to_string()).unwrap_or("0".to_string());
-    let start_time = process.start_time();
-    let memory = process.memory();
     let status = format!("{:?}", process.status());
-    let cwd = process.cwd().map(|p| p.to_string_lossy()).unwrap_or_default();
-    let root = process.root().map(|p| p.to_string_lossy()).unwrap_or_default();
 
     // Log detailed process info at INFO level as requested
-    log::info!("ANALYZED_PROCESS PID: {} PPID: {} NAME: {:?} PATH: {:?} CMD: {:?} USER: {:?} UID: {:?} START: {} MEM: {} STATUS: {:?} CWD: {:?} ROOT: {:?}",
-        pid_u32, ppid, proc_name_str, path, cmd_line, username, user_id.map(|u| u.to_string()).unwrap_or_default(),
-        start_time, memory, status, cwd, root
+    let info_output = format!("{}: {}\n      {}: {} {}: {} {}: {} {}: {}\n      {}: {}\n", 
+        "ANALYZED".green(), proc_name_str.white(),
+        "PID".green(), pid_u32.to_string().white(),
+        "PPID".green(), ppid.white(),
+        "USER".green(), username.white(),
+        "STATUS".green(), status.white(),
+        "CMD".green(), if cmd_line.len() > 100 { format!("{}...", &cmd_line[..97]) } else { cmd_line.clone() }.white()
     );
+    log::info!("{}", info_output);
 
     // Debug output
     log::debug!("Trying to scan process PID: {} PROC_NAME: {}", pid_u32, proc_name_str);
@@ -388,12 +408,15 @@ fn process_single_process(
         
         let message_level = if total_score >= scan_config.alert_threshold as f64 {
             alert_count += 1;
+            if let Some(state) = scan_state { state.add_alerts(1); }
             "ALERT"
         } else if total_score >= scan_config.warning_threshold as f64 {
             warning_count += 1;
+            if let Some(state) = scan_state { state.add_warnings(1); }
             "WARNING"
         } else if total_score >= scan_config.notice_threshold as f64 {
             notice_count += 1;
+            if let Some(state) = scan_state { state.add_notices(1); }
             "NOTICE"
         } else {
             log::debug!("Process match below notice threshold PID: {} SCORE: {:.2}", pid_u32, total_score);
@@ -412,16 +435,21 @@ fn process_single_process(
             }
         };
 
-        let mut output = format!("{}: {} {}: {}\n      {}: {}\n", 
+        let mut output = format!("{}: {}\n      {}: {} {}: {} {}: {}\n      {}: {}\n", 
+            colorize("PROCESS"),
+            proc_name_str.white(), 
             colorize("PID"),
             pid_u32.to_string().white(),
-            colorize("PROC_NAME"),
-            proc_name_str.white(), 
             colorize("SCORE"),
-            total_score.round().to_string().white());
+            total_score.round().to_string().white(),
+            colorize("USER"),
+            username.white(),
+            colorize("CMD"),
+            if cmd_line.len() > 100 { format!("{}...", &cmd_line[..97]) } else { cmd_line.clone() }.white()
+        );
         
         for (i, reason) in shown_reasons.iter().enumerate() {
-            output.push_str(&format!("      {}_{}: {} {}: {}\n", 
+            output.push_str(&format!("      {}_{}: {}\n         {}: {}\n", 
                 colorize("REASON"), 
                 i + 1, 
                 reason.message.white(), 
@@ -473,6 +501,11 @@ fn process_single_process(
         }
     }
     
+    // Clear current element from status
+    if let Some(state) = scan_state {
+        state.clear_current_element();
+    }
+
     (processes_scanned, processes_matched, alert_count, warning_count, notice_count)
 }
 

@@ -2,6 +2,7 @@ mod helpers;
 mod modules;
 
 use std::fs;
+use std::sync::Arc;
 use rustop::opts;
 use flexi_logger::*;
 use colored::Colorize;
@@ -14,6 +15,7 @@ use yara_x::{Compiler, Rules};
 
 use crate::helpers::helpers::{get_hostname, get_os_type, evaluate_env};
 use crate::helpers::jsonl_logger::JsonlLogger;
+use crate::helpers::interrupt::ScanState;
 use crate::modules::{ScanModule, ScanContext};
 use crate::modules::process_check::ProcessCheckModule;
 use crate::modules::filesystem_scan::FileScanModule;
@@ -962,6 +964,14 @@ fn main() {
         }
     };
 
+    // Initialize interrupt handler
+    let scan_state = Arc::new(ScanState::new());
+    let scan_state_clone = scan_state.clone();
+    
+    ctrlc::set_handler(move || {
+        scan_state_clone.display_menu();
+    }).expect("Error setting Ctrl-C handler");
+
     // Register available modules
     let modules: Vec<Box<dyn ScanModule>> = vec![
         Box::new(ProcessCheckModule),
@@ -972,6 +982,12 @@ fn main() {
 
     // Execute modules
     for module in modules {
+        // Check if we should stop before starting next module
+        if scan_state.should_stop() {
+            log::info!("Scan aborted by user.");
+            break;
+        }
+
         if active_modules.contains(&module.name().to_string()) {
             if module.name() == "ProcessCheck" {
                  log::info!("Scanning running processes ... ");
@@ -990,6 +1006,7 @@ fn main() {
                 c2_iocs: &c2_iocs,
                 jsonl_logger: jsonl_logger.as_ref(),
                 remote_logger: None,
+                scan_state: Some(scan_state.clone()),
                 target_folder: &target_folder,
             };
             

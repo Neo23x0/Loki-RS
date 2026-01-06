@@ -1,5 +1,6 @@
 use std::{fs};
 use std::time::{UNIX_EPOCH};
+use std::sync::Arc;
 use arrayvec::ArrayVec;
 use filesize::PathExt;
 use file_format::FileFormat;
@@ -30,6 +31,7 @@ use crate::helpers::jsonl_logger::{JsonlLogger, MatchReason};
 use crate::helpers::remote_logger::RemoteLogger;
 use crate::helpers::throttler::{init_thread_throttler, throttle_start, throttle_end};
 use crate::helpers::helpers::log_access_error;
+use crate::helpers::interrupt::ScanState;
 
 const REL_EXTS: &'static [&'static str] = &[".exe", ".dll", ".bat", ".ps1", ".asp", ".aspx", ".jsp", ".jspx", 
     ".php", ".plist", ".sh", ".vbs", ".js", ".dmp", ".py", ".msix"];
@@ -198,7 +200,8 @@ impl ScanModule for FileScanModule {
             context.fp_hash_collections,
             context.filename_iocs,
             context.jsonl_logger,
-            context.remote_logger
+            context.remote_logger,
+            context.scan_state.as_ref()
         )
     }
 }
@@ -212,7 +215,8 @@ pub fn scan_path (
     fp_hash_collections: &FalsePositiveHashCollections,
     filename_iocs: &Vec<FilenameIOC>,
     jsonl_logger: Option<&JsonlLogger>,
-    remote_logger: Option<&RemoteLogger>) -> (usize, usize, usize, usize, usize) {
+    remote_logger: Option<&RemoteLogger>,
+    scan_state: Option<&Arc<ScanState>>) -> (usize, usize, usize, usize, usize) {
     
     let cpu_limit = scan_config.cpu_limit;
     
@@ -235,6 +239,8 @@ pub fn scan_path (
         .follow_links(false)  // Match v1 behavior: followlinks=False
         .into_iter();
         
+    let scan_state_ref = scan_state.cloned();
+
     // Process files in parallel
     let (files_scanned, files_matched, alert_count, warning_count, notice_count) = walk.par_bridge()
         .map(|entry_res| {
@@ -250,13 +256,17 @@ pub fn scan_path (
                         fp_hash_collections, 
                         filename_iocs, 
                         jsonl_logger,
-                        remote_logger
+                        remote_logger,
+                        scan_state_ref.as_ref()
                     );
                     throttle_end();
                     result
                 },
                 Err(e) => {
                     log_access_error("fs_object", &e, scan_config.show_access_errors);
+                    if let Some(ref state) = scan_state_ref {
+                        state.increment_errors();
+                    }
                     (0, 0, 0, 0, 0)
                 }
             }
@@ -284,7 +294,8 @@ fn process_file_entry(
     fp_hash_collections: &FalsePositiveHashCollections,
     filename_iocs: &Vec<FilenameIOC>,
     jsonl_logger: Option<&JsonlLogger>,
-    remote_logger: Option<&RemoteLogger>
+    remote_logger: Option<&RemoteLogger>,
+    scan_state: Option<&Arc<ScanState>>
 ) -> (usize, usize, usize, usize, usize) {
     let mut files_scanned = 0;
     let mut files_matched = 0;
@@ -294,9 +305,23 @@ fn process_file_entry(
 
     let file_path = entry.path();
     let file_path_str = file_path.to_string_lossy();
+
+    // Check interrupt state
+    if let Some(state) = scan_state {
+        if state.should_stop() {
+            return (0, 0, 0, 0, 0);
+        }
+        state.wait_for_resume(); // Wait if menu is active
+        if state.should_stop() {
+            return (0, 0, 0, 0, 0);
+        }
+        state.set_current_element(file_path_str.to_string());
+        state.increment_files();
+    }
     
     // Determine if we should exclude mounted devices
     let exclude_mounted = !scan_config.scan_all_drives;
+
 
     // Cloud/Network exclusions (skip if path contains cloud keywords)
     if exclude_mounted && is_cloud_or_remote_path(&file_path_str) {
@@ -612,12 +637,15 @@ fn process_file_entry(
         // Determine message level based on thresholds
         let message_level = if total_score >= scan_config.alert_threshold as f64 {
             alert_count += 1;
+            if let Some(state) = scan_state { state.add_alerts(1); }
             "ALERT"
         } else if total_score >= scan_config.warning_threshold as f64 {
             warning_count += 1;
+            if let Some(state) = scan_state { state.add_warnings(1); }
             "WARNING"
         } else if total_score >= scan_config.notice_threshold as f64 {
             notice_count += 1;
+            if let Some(state) = scan_state { state.add_notices(1); }
             "NOTICE"
         } else {
             // Below notice threshold, skip logging unless debug
@@ -717,6 +745,11 @@ fn process_file_entry(
         }
     }
     
+    // Clear current element from status
+    if let Some(state) = scan_state {
+        state.clear_current_element();
+    }
+
     // Return summary statistics
     (files_scanned, files_matched, alert_count, warning_count, notice_count)
 }
