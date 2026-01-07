@@ -37,6 +37,14 @@ sudo ./loki --help
 
 Signatures ship with the release but get stale quickly. Run `loki-util update` to fetch the latest IOCs and YARA rules.
 
+## Signatures
+
+Loki-RS uses detection content from two sources:
+
+**IOCs** are pulled from [signature-base](https://github.com/Neo23x0/signature-base), a collection of hash, filename, and C2 indicators maintained alongside Loki.
+
+**YARA rules** come from [YARA Forge](https://yaraforge.com/), which aggregates and quality-checks rules from public repositories. Loki-RS uses the **Core** rule set - high accuracy, low false positives, optimized for performance. If you need broader coverage, you can swap in the Extended or Full sets from YARA Forge.
+
 ## Usage
 
 ```bash
