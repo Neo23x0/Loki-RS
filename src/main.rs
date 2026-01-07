@@ -4,8 +4,6 @@ mod modules;
 use std::fs;
 use std::sync::Arc;
 use rustop::opts;
-use flexi_logger::*;
-use colored::Colorize;
 use arrayvec::ArrayVec;
 use csv::ReaderBuilder;
 use rayon::ThreadPoolBuilder;
@@ -14,7 +12,7 @@ use chrono::Local;
 use yara_x::{Compiler, Rules};
 
 use crate::helpers::helpers::{get_hostname, get_os_type, evaluate_env};
-use crate::helpers::jsonl_logger::JsonlLogger;
+use crate::helpers::unified_logger::{UnifiedLogger, LoggerConfig, RemoteConfig, RemoteProtocol, RemoteFormat, LogLevel};
 use crate::helpers::interrupt::ScanState;
 use crate::modules::{ScanModule, ScanContext};
 use crate::modules::process_check::ProcessCheckModule;
@@ -23,15 +21,18 @@ use crate::modules::filesystem_scan::FileScanModule;
 // Specific TODOs
 // - better error handling
 
-const VERSION: &str = "2.3.1-beta";
+const VERSION: &str = "2.4.0-beta";
 
 const SIGNATURE_SOURCE: &str = "./signatures";
 const MODULES: &'static [&'static str] = &["FileScan", "ProcessCheck"];
 
 #[derive(Debug)]
 pub struct GenMatch {
-    message: String,
-    score: i16,
+    pub message: String,
+    pub score: i16,
+    pub description: Option<String>,
+    pub author: Option<String>,
+    pub matched_strings: Option<Vec<String>>,
 }
 
 pub struct YaraMatch {
@@ -117,15 +118,15 @@ pub enum FilenameIOCType {
 // TODO: under construction - the data structure to hold the IOCs is still limited to 100.000 elements. 
 //       I have to find a data structure that allows to store an unknown number of entries.
 // Initialize the IOCs
-fn initialize_hash_iocs() -> Vec<HashIOC> {
+fn initialize_hash_iocs(logger: &UnifiedLogger) -> Vec<HashIOC> {
     // Compose the location of the hash IOC file
     let hash_ioc_file = format!("{}/iocs/hash-iocs.txt", SIGNATURE_SOURCE);
     // Read the hash IOC file
     let hash_iocs_string = match fs::read_to_string(&hash_ioc_file) {
         Ok(content) => content,
         Err(e) => {
-            log::error!("Unable to read hash IOC file {}: {:?}", hash_ioc_file, e);
-            log::error!("Please ensure signature-base is available at {}", SIGNATURE_SOURCE);
+            logger.error(&format!("Unable to read hash IOC file {}: {:?}", hash_ioc_file, e));
+            logger.error(&format!("Please ensure signature-base is available at {}", SIGNATURE_SOURCE));
             return Vec::new(); // Return empty vector instead of panicking
         }
     };
@@ -141,7 +142,7 @@ fn initialize_hash_iocs() -> Vec<HashIOC> {
         let record_result = result;
         let record = match record_result {
             Ok(r) => r,
-            Err(e) => { log::debug!("Cannot read line in hash IOCs file (which can be okay) ERROR: {:?}", e); continue;}
+            Err(e) => { logger.debug(&format!("Cannot read line in hash IOCs file (which can be okay) ERROR: {:?}", e)); continue;}
         };
         // Skip comment lines and empty lines
         if record.is_empty() || record[0].starts_with("#") || record[0].trim().is_empty() {
@@ -158,7 +159,7 @@ fn initialize_hash_iocs() -> Vec<HashIOC> {
         
         let hash_type: HashType = get_hash_type(&hash);
         if matches!(hash_type, HashType::Unknown) {
-            log::debug!("Skipping invalid hash (unknown type): {}", hash);
+            logger.debug(&format!("Skipping invalid hash (unknown type): {}", hash));
             continue;
         }
         
@@ -169,12 +170,12 @@ fn initialize_hash_iocs() -> Vec<HashIOC> {
                     (s, record[2].trim().to_string())
                 }
                 Ok(s) => {
-                    log::debug!("Invalid score {} for hash {}, using default 75", s, hash);
+                    logger.debug(&format!("Invalid score {} for hash {}, using default 75", s, hash));
                     (75, record[2].trim().to_string())
                 }
                 Err(_) => {
                     // If score column is not a number, treat as 2-column format
-                    log::debug!("Score column is not a number for hash {}, treating as 2-column format", hash);
+                    logger.debug(&format!("Score column is not a number for hash {}, treating as 2-column format", hash));
                     (75, record[1].trim().to_string())
                 }
             }
@@ -183,11 +184,11 @@ fn initialize_hash_iocs() -> Vec<HashIOC> {
             (75, record[1].trim().to_string())
         } else {
             // Invalid format, skip
-            log::debug!("Skipping hash IOC with invalid format: {:?}", record);
+            logger.debug(&format!("Skipping hash IOC with invalid format: {:?}", record));
             continue;
         };
         
-        log::trace!("Read hash IOC HASH: {} DESC: {} SCORE: {} TYPE: {:?}", hash, description, score, hash_type);
+        logger.debug(&format!("Read hash IOC HASH: {} DESC: {} SCORE: {} TYPE: {:?}", hash, description, score, hash_type));
         hash_iocs.push(
             HashIOC { 
                 hash_type,
@@ -196,7 +197,7 @@ fn initialize_hash_iocs() -> Vec<HashIOC> {
                 score,
             });
     }
-    log::info!("Successfully initialized {} hash values", hash_iocs.len());
+    logger.info(&format!("Successfully initialized {} hash values", hash_iocs.len()));
     
     // Sort hashes by value for binary search
     hash_iocs.sort_by(|a, b| a.hash_value.cmp(&b.hash_value));
@@ -206,7 +207,7 @@ fn initialize_hash_iocs() -> Vec<HashIOC> {
 
 // Initialize false positive hash IOCs
 // Files must contain both "hash" and "falsepositive" in filename
-fn initialize_false_positive_hash_iocs() -> Vec<HashIOC> {
+fn initialize_false_positive_hash_iocs(logger: &UnifiedLogger) -> Vec<HashIOC> {
     // Compose the location of the hash IOC directory
     let hash_ioc_dir = format!("{}/iocs", SIGNATURE_SOURCE);
     
@@ -214,7 +215,7 @@ fn initialize_false_positive_hash_iocs() -> Vec<HashIOC> {
     let dir = match fs::read_dir(&hash_ioc_dir) {
         Ok(d) => d,
         Err(e) => {
-            log::debug!("Unable to read IOC directory {}: {:?}", hash_ioc_dir, e);
+            logger.debug(&format!("Unable to read IOC directory {}: {:?}", hash_ioc_dir, e));
             return Vec::new();
         }
     };
@@ -234,13 +235,13 @@ fn initialize_false_positive_hash_iocs() -> Vec<HashIOC> {
         // Check if filename contains both "hash" and "falsepositive"
         if file_name_str.contains("hash") && file_name_str.contains("falsepositive") {
             let file_path = entry.path();
-            log::info!("Loading false positive hash file: {:?}", file_path);
+            logger.info(&format!("Loading false positive hash file: {:?}", file_path));
             
             // Read the file
             let content = match fs::read_to_string(&file_path) {
                 Ok(c) => c,
                 Err(e) => {
-                    log::warn!("Unable to read false positive hash file {:?}: {:?}", file_path, e);
+                    logger.warning(&format!("Unable to read false positive hash file {:?}: {:?}", file_path, e));
                     continue;
                 }
             };
@@ -255,7 +256,7 @@ fn initialize_false_positive_hash_iocs() -> Vec<HashIOC> {
                 let record = match result {
                     Ok(r) => r,
                     Err(e) => {
-                        log::debug!("Cannot read line in false positive hash file (which can be okay) ERROR: {:?}", e);
+                        logger.debug(&format!("Cannot read line in false positive hash file (which can be okay) ERROR: {:?}", e));
                         continue;
                     }
                 };
@@ -273,7 +274,7 @@ fn initialize_false_positive_hash_iocs() -> Vec<HashIOC> {
                 
                 let hash_type: HashType = get_hash_type(&hash);
                 if matches!(hash_type, HashType::Unknown) {
-                    log::debug!("Skipping invalid false positive hash (unknown type): {}", hash);
+                    logger.debug(&format!("Skipping invalid false positive hash (unknown type): {}", hash));
                     continue;
                 }
                 
@@ -284,7 +285,7 @@ fn initialize_false_positive_hash_iocs() -> Vec<HashIOC> {
                     "False positive".to_string()
                 };
                 
-                log::trace!("Read false positive hash HASH: {} TYPE: {:?}", hash, hash_type);
+                logger.debug(&format!("Read false positive hash HASH: {} TYPE: {:?}", hash, hash_type));
                 all_fp_hashes.push(
                     HashIOC {
                         hash_type: hash_type,
@@ -297,13 +298,13 @@ fn initialize_false_positive_hash_iocs() -> Vec<HashIOC> {
         }
     }
     
-    log::info!("Successfully initialized {} false positive hash values", all_fp_hashes.len());
+    logger.info(&format!("Successfully initialized {} false positive hash values", all_fp_hashes.len()));
     all_fp_hashes.sort_by(|a, b| a.hash_value.cmp(&b.hash_value));
     all_fp_hashes
 }
 
 // Organize hash IOCs by type for efficient binary search
-fn organize_hash_iocs(hash_iocs: Vec<HashIOC>, label: &str) -> HashIOCCollections {
+fn organize_hash_iocs(hash_iocs: Vec<HashIOC>, label: &str, logger: &UnifiedLogger) -> HashIOCCollections {
     let mut md5_iocs = Vec::new();
     let mut sha1_iocs = Vec::new();
     let mut sha256_iocs = Vec::new();
@@ -322,8 +323,8 @@ fn organize_hash_iocs(hash_iocs: Vec<HashIOC>, label: &str) -> HashIOCCollection
     sha1_iocs.sort_by(|a, b| a.hash_value.cmp(&b.hash_value));
     sha256_iocs.sort_by(|a, b| a.hash_value.cmp(&b.hash_value));
     
-    log::info!("Organized {} - MD5: {} SHA1: {} SHA256: {}", 
-        label, md5_iocs.len(), sha1_iocs.len(), sha256_iocs.len());
+    logger.info(&format!("Organized {} - MD5: {} SHA1: {} SHA256: {}", 
+        label, md5_iocs.len(), sha1_iocs.len(), sha256_iocs.len()));
     
     HashIOCCollections {
         md5_iocs,
@@ -352,7 +353,7 @@ fn get_hash_type(hash_value: &str) -> HashType {
 
 // Initialize C2 IOCs
 // Files must contain "c2" in filename
-fn initialize_c2_iocs() -> Vec<C2IOC> {
+fn initialize_c2_iocs(logger: &UnifiedLogger) -> Vec<C2IOC> {
     // Compose the location of the IOC directory
     let ioc_dir = format!("{}/iocs", SIGNATURE_SOURCE);
     
@@ -360,7 +361,7 @@ fn initialize_c2_iocs() -> Vec<C2IOC> {
     let dir = match fs::read_dir(&ioc_dir) {
         Ok(d) => d,
         Err(e) => {
-            log::debug!("Unable to read IOC directory {}: {:?}", ioc_dir, e);
+            logger.debug(&format!("Unable to read IOC directory {}: {:?}", ioc_dir, e));
             return Vec::new();
         }
     };
@@ -381,13 +382,13 @@ fn initialize_c2_iocs() -> Vec<C2IOC> {
         // Check if filename contains "c2"
         if file_name_str.contains("c2") {
             let file_path = entry.path();
-            log::info!("Loading C2 IOC file: {:?}", file_path);
+            logger.info(&format!("Loading C2 IOC file: {:?}", file_path));
             
             // Read the file
             let content = match fs::read_to_string(&file_path) {
                 Ok(c) => c,
                 Err(e) => {
-                    log::warn!("Unable to read C2 IOC file {:?}: {:?}", file_path, e);
+                    logger.warning(&format!("Unable to read C2 IOC file {:?}: {:?}", file_path, e));
                     continue;
                 }
             };
@@ -416,7 +417,7 @@ fn initialize_c2_iocs() -> Vec<C2IOC> {
                 
                 // Check minimum length (4 characters)
                 if c2_server.len() < 4 {
-                    log::debug!("C2 server definition is suspiciously short - will not add: {}", c2_server);
+                    logger.debug(&format!("C2 server definition is suspiciously short - will not add: {}", c2_server));
                     continue;
                 }
                 
@@ -425,11 +426,11 @@ fn initialize_c2_iocs() -> Vec<C2IOC> {
                     match parts[1].trim().parse::<i16>() {
                         Ok(s) if s > 0 && s <= 100 => s,
                         Ok(s) => {
-                            log::debug!("Invalid score {} for C2 server {}, using default 75", s, c2_server);
+                            logger.debug(&format!("Invalid score {} for C2 server {}, using default 75", s, c2_server));
                             75
                         }
                         Err(_) => {
-                            log::debug!("Score column is not a number for C2 server {}, using default 75", c2_server);
+                            logger.debug(&format!("Score column is not a number for C2 server {}, using default 75", c2_server));
                             75
                         }
                     }
@@ -443,7 +444,7 @@ fn initialize_c2_iocs() -> Vec<C2IOC> {
                     last_comment.clone()
                 };
                 
-                log::trace!("Read C2 IOC SERVER: {} SCORE: {} DESC: {}", c2_server, score, description);
+                logger.debug(&format!("Read C2 IOC SERVER: {} SCORE: {} DESC: {}", c2_server, score, description));
                 all_c2_iocs.push(
                     C2IOC {
                         server: c2_server,
@@ -455,7 +456,7 @@ fn initialize_c2_iocs() -> Vec<C2IOC> {
         }
     }
     
-    log::info!("Successfully initialized {} C2 IOC values", all_c2_iocs.len());
+    logger.info(&format!("Successfully initialized {} C2 IOC values", all_c2_iocs.len()));
     all_c2_iocs
 }
 
@@ -501,15 +502,15 @@ fn is_ip_address(addr: &str) -> bool {
 } 
 
 // Initialize filename IOCs / patterns
-fn initialize_filename_iocs() -> Vec<FilenameIOC> {
+fn initialize_filename_iocs(logger: &UnifiedLogger) -> Vec<FilenameIOC> {
     // Compose the location of the filename IOC file
     let filename_ioc_file = format!("{}/iocs/filename-iocs.txt", SIGNATURE_SOURCE);
     // Read the filename IOC file
     let filename_iocs_string = match fs::read_to_string(&filename_ioc_file) {
         Ok(content) => content,
         Err(e) => {
-            log::error!("Unable to read filename IOC file {}: {:?}", filename_ioc_file, e);
-            log::error!("Please ensure signature-base is available at {}", SIGNATURE_SOURCE);
+            logger.error(&format!("Unable to read filename IOC file {}: {:?}", filename_ioc_file, e));
+            logger.error(&format!("Please ensure signature-base is available at {}", SIGNATURE_SOURCE));
             return Vec::new(); // Return empty vector instead of panicking
         }
     };
@@ -528,7 +529,7 @@ fn initialize_filename_iocs() -> Vec<FilenameIOC> {
         let record = match result {
             Ok(r) => r,
             Err(e) => { 
-                log::debug!("Cannot read line in filename IOCs file (which can be okay) ERROR: {:?}", e); 
+                logger.debug(&format!("Cannot read line in filename IOCs file (which can be okay) ERROR: {:?}", e)); 
                 continue;
             }
         };
@@ -567,12 +568,12 @@ fn initialize_filename_iocs() -> Vec<FilenameIOC> {
                 match record[1].trim().parse::<i16>() {
                     Ok(s) if s > 0 && s <= 100 => s,
                     Ok(s) => {
-                        log::debug!("Invalid score {} for pattern {}, using default 75", s, pattern);
+                        logger.debug(&format!("Invalid score {} for pattern {}, using default 75", s, pattern));
                         75
                     }
                     Err(_) => {
                         // If score is not a number, treat as description (old format)
-                        log::debug!("Score column is not a number for pattern {}, using default 75", pattern);
+                        logger.debug(&format!("Score column is not a number for pattern {}, using default 75", pattern));
                         75
                     }
                 }
@@ -585,7 +586,7 @@ fn initialize_filename_iocs() -> Vec<FilenameIOC> {
                 match Regex::new(record[2].trim()) {
                     Ok(r) => Some(r),
                     Err(e) => {
-                        log::debug!("Invalid false positive regex for pattern {}: {:?}", pattern, e);
+                        logger.debug(&format!("Invalid false positive regex for pattern {}: {:?}", pattern, e));
                         None
                     }
                 }
@@ -598,12 +599,12 @@ fn initialize_filename_iocs() -> Vec<FilenameIOC> {
             let regex = match Regex::new(pattern) {
                 Ok(r) => r,
                 Err(e) => {
-                    log::error!("Invalid regex pattern in filename IOC: {} ERROR: {:?}", pattern, e);
+                    logger.error(&format!("Invalid regex pattern in filename IOC: {} ERROR: {:?}", pattern, e));
                     continue; // Skip invalid patterns
                 }
             };
             
-            log::trace!("Read filename IOC PATTERN: {} SCORE: {} DESC: {}", pattern, score, description);
+            logger.debug(&format!("Read filename IOC PATTERN: {} SCORE: {} DESC: {}", pattern, score, description));
             filename_iocs.push(
                 FilenameIOC { 
                     pattern: pattern.to_string(),
@@ -614,7 +615,7 @@ fn initialize_filename_iocs() -> Vec<FilenameIOC> {
                 });
         }
     }
-    log::info!("Successfully initialized {} filename IOC values", filename_iocs.len());
+    logger.info(&format!("Successfully initialized {} filename IOC values", filename_iocs.len()));
 
     // Return file name IOCs
     return filename_iocs;
@@ -628,7 +629,7 @@ fn get_filename_ioc_type(_filename_ioc_value: &str) -> FilenameIOCType {
 } 
 
 // Initialize the rule files
-fn initialize_yara_rules() -> Result<Rules, String> {
+fn initialize_yara_rules(logger: &UnifiedLogger) -> Result<Rules, String> {
     // Composed YARA rule set 
     // we're concatenating all rules from all rule files to a single string and 
     // compile them all together into a single big rule set for performance purposes
@@ -649,25 +650,25 @@ fn initialize_yara_rules() -> Result<Rules, String> {
         .into_iter();
     // Test compile each rule
     for file in filtered_files {
-        log::debug!("Reading YARA rule file {} ...", file.path().to_str().unwrap());
+        logger.debug(&format!("Reading YARA rule file {} ...", file.path().to_str().unwrap()));
         // Read the rule file
         let rules_string = match fs::read_to_string(file.path()) {
             Ok(content) => content,
             Err(e) => {
-                log::error!("Unable to read YARA rule file {:?}: {:?}", file.path(), e);
+                logger.error(&format!("Unable to read YARA rule file {:?}: {:?}", file.path(), e));
                 continue;
             }
         };
         let compiled_file_result = compile_yara_rules(&rules_string);
         match compiled_file_result {
             Ok(_) => { 
-                log::debug!("Successfully compiled rule file {:?} - adding it to the big set", file.path().to_str().unwrap());
+                logger.debug(&format!("Successfully compiled rule file {:?} - adding it to the big set", file.path().to_str().unwrap()));
                 // adding content of that file to the whole rules string
                 all_rules += &rules_string;
                 count += 1;
             },
             Err(e) => {
-                log::error!("Cannot compile rule file {:?}. Ignoring file. ERROR: {:?}", file.path().to_str().unwrap(), e)                
+                logger.error(&format!("Cannot compile rule file {:?}. Ignoring file. ERROR: {:?}", file.path().to_str().unwrap(), e))                
             }
         };
     }
@@ -685,7 +686,7 @@ fn initialize_yara_rules() -> Result<Rules, String> {
         .filter(|line| line.trim().starts_with("rule "))
         .count();
     
-    log::info!("Successfully compiled {} rules from {} rule files into a big set", rule_count, count);
+    logger.info(&format!("Successfully compiled {} rules from {} rule files into a big set", rule_count, count));
     Ok(compiled_all_rules)
 }
 
@@ -710,68 +711,9 @@ fn compile_yara_rules(rules_string: &str) -> Result<Rules, String> {
     Ok(rules)
 }
 
-// Log file format for files
-fn log_file_format(
-    write: &mut dyn std::io::Write,
-    now: &mut flexi_logger::DeferredNow,
-    record: &log::Record,
- ) -> std::io::Result<()> {
-    write!(
-        write,
-        "[{}] {} {}",
-        now.format("%Y-%m-%dT%H:%M:%SZ"),
-        record.level(),
-        &record.args()
-    )
-}
 
-// Log file format for command line
-fn log_cmdline_format(
-    w: &mut dyn std::io::Write,
-    _now: &mut DeferredNow,
-    record: &Record,
-) -> Result<(), std::io::Error> {
-    let level = record.level();
-    let msg = record.args().to_string();
-    
-    // Determine color based on level and message content
-    // Standard (Green) -> Info (not starting with NOTICE)
-    // Notice (Light Blue) -> Info (starting with NOTICE)
-    // Warnings (Yellow) -> Warn
-    // Alerts (Red) -> Error (starting with ALERT)
-    // Errors (Purple) -> Error (not starting with ALERT)
-    
-    let colored_msg = match level {
-        log::Level::Error => {
-            if msg.starts_with("ALERT") {
-                let clean_msg = msg.trim_start_matches("ALERT").trim();
-                format!(" {} {} ", "[ALERT]".black().on_red(), clean_msg.red()).normal().to_string()
-            } else {
-                format!(" {} {} ", format!("[{}]", level).black().on_purple(), msg.white())
-            }
-        },
-        log::Level::Warn => {
-            if msg.starts_with("WARNING") {
-                let clean_msg = msg.trim_start_matches("WARNING").trim();
-                format!(" {} {} ", "[WARNING]".black().on_yellow(), clean_msg.yellow()).normal().to_string()
-            } else {
-                format!(" {} {} ", format!("[{}]", level).black().on_yellow(), msg.white())
-            }
-        },
-        log::Level::Info => {
-            if msg.starts_with("NOTICE") {
-                let clean_msg = msg.trim_start_matches("NOTICE").trim();
-                format!(" {} {} ", "[NOTICE]".black().on_cyan(), clean_msg.white())
-            } else {
-                format!(" {} {} ", format!("[{}]", level).black().on_green(), msg.white())
-            }
-        },
-        log::Level::Debug => format!(" {} {} ", format!("[{}]", level).black().on_white(), msg.white()),
-        log::Level::Trace => format!(" {} {} ", format!("[{}]", level).white().on_black(), msg.white().dimmed()),
-    };
-    
-    write!(w, "{}", colored_msg)
-}
+
+
 
 // Welcome message
 fn welcome_message() {
@@ -810,7 +752,13 @@ fn main() {
         opt warning_level:i16=60, desc:"Warning score threshold (default: 60)";
         opt notice_level:i16=40, desc:"Notice score threshold (default: 40)";
         opt max_reasons:usize=2, desc:"Maximum number of reasons to show (default: 2)";
-        opt jsonl:Option<String>, desc:"Enable JSONL output to specified file";
+        opt jsonl:Option<String>, desc:"Specify JSONL output file (defaults to loki_<hostname>_<date>.jsonl)";
+        opt no_jsonl:bool, desc:"Disable JSONL output";
+        opt log:Option<String>, desc:"Specify log output file (defaults to loki_<hostname>_<date>.log)";
+        opt nolog:bool, desc:"Disable plaintext log output";
+        opt remote:Option<String>, desc:"Enable remote logging (host:port)";
+        opt remote_proto:String="udp".to_string(), desc:"Remote protocol (udp/tcp, default: udp)";
+        opt remote_format:String="syslog".to_string(), desc:"Remote format (syslog/json, default: syslog)";
         opt version:bool, desc:"Show version information and exit";
         opt threads:i32=-2, desc:"Number of threads to use (0=all cores, -1=all-1, -2=all-2)";
     }.parse_or_exit();
@@ -833,8 +781,6 @@ fn main() {
         } else if args.threads == -2 {
              if cpus > 2 { cpus - 2 } else { 1 }
         } else {
-             // Fallback for other negative numbers, treat as 1 or default?
-             // User only specified -1 and -2. Let's default to 1 for other negative values or clamp.
              1
         }
     };
@@ -842,50 +788,98 @@ fn main() {
     // Start time
     let start_time = Local::now();
 
-    // Logger
-    let mut log_level: String = "info".to_string(); let mut std_out = Duplicate::Info; // default
-    if args.debug { log_level = "debug".to_string(); std_out = Duplicate::Debug; }  // set to debug level
-    if args.trace { log_level = "trace".to_string(); std_out = Duplicate::Trace; }  // set to trace level
-    let log_file_name = format!("loki_{}", get_hostname());
-    let logger_handle = Logger::try_with_str(log_level).unwrap()
-        .log_to_file(
-            FileSpec::default()
-                .basename(log_file_name.clone())
-        )
-        .use_utc()
-        .format(log_cmdline_format)
-        .format_for_files(log_file_format)
-        .duplicate_to_stdout(std_out)
-        .append()
-        .start()
-        .unwrap();
-    log::info!("Loki-RS scan started VERSION: {}", VERSION);
+    // Determine log level
+    let log_level = if args.trace {
+        LogLevel::Debug
+    } else if args.debug {
+        LogLevel::Debug
+    } else {
+        LogLevel::Info
+    };
 
-    // Configure thread pool
-    match ThreadPoolBuilder::new().num_threads(num_threads).build_global() {
-        Ok(_) => log::info!("Initialized thread pool with {} threads", num_threads),
-        Err(e) => log::error!("Failed to initialize thread pool: {}", e),
-    }
+    // Determine log file path
+    let log_file = if args.nolog {
+        None
+    } else {
+        Some(args.log.unwrap_or_else(|| {
+            format!("loki_{}_{}.log", 
+                get_hostname(), 
+                Local::now().format("%Y-%m-%d_%H-%M-%S")
+            )
+        }))
+    };
 
-    // Initialize JSONL logger if requested
-    let jsonl_logger: Option<JsonlLogger> = if let Some(ref jsonl_file) = args.jsonl {
-        match JsonlLogger::new(jsonl_file) {
-            Ok(logger) => {
-                log::info!("JSONL logging enabled: {}", jsonl_file);
-                Some(logger)
-            }
-            Err(e) => {
-                log::error!("Failed to open JSONL log file {}: {}", jsonl_file, e);
-                std::process::exit(1);
-            }
+    // Determine JSONL file path
+    let jsonl_file = if args.no_jsonl {
+        None
+    } else {
+        Some(args.jsonl.unwrap_or_else(|| {
+            format!("loki_{}_{}.jsonl", 
+                get_hostname(), 
+                Local::now().format("%Y-%m-%d_%H-%M-%S")
+            )
+        }))
+    };
+
+    // Determine remote config
+    let remote = if let Some(host_port) = args.remote {
+        let parts: Vec<&str> = host_port.split(':').collect();
+        if parts.len() != 2 {
+            eprintln!("Invalid remote address format. Use host:port");
+            std::process::exit(1);
         }
+        let host = parts[0].to_string();
+        let port = parts[1].parse::<u16>().expect("Invalid port number");
+        
+        let protocol = match args.remote_proto.to_lowercase().as_str() {
+            "tcp" => RemoteProtocol::Tcp,
+            _ => RemoteProtocol::Udp,
+        };
+        
+        let format = match args.remote_format.to_lowercase().as_str() {
+            "json" => RemoteFormat::Json,
+            _ => RemoteFormat::Syslog,
+        };
+        
+        Some(RemoteConfig { host, port, protocol, format })
     } else {
         None
     };
 
+    let logger_config = LoggerConfig {
+        console: true,
+        log_level,
+        log_file: log_file.clone(),
+        jsonl_file: jsonl_file.clone(),
+        remote,
+    };
+
+    let logger = match UnifiedLogger::new(logger_config) {
+        Ok(l) => l,
+        Err(e) => {
+            eprintln!("Failed to initialize logger: {}", e);
+            std::process::exit(1);
+        }
+    };
+
+    logger.scan_start(VERSION);
+
+    // Configure thread pool
+    match ThreadPoolBuilder::new().num_threads(num_threads).build_global() {
+        Ok(_) => logger.info(&format!("Initialized thread pool with {} threads", num_threads)),
+        Err(e) => logger.error(&format!("Failed to initialize thread pool: {}", e)),
+    }
+
+    if let Some(path) = &jsonl_file {
+        logger.info(&format!("JSONL logging enabled: {}", path));
+    }
+    if let Some(path) = &log_file {
+        logger.info(&format!("Log file enabled: {}", path));
+    }
+
     // Print platform & environment information
-    evaluate_env();
-    log::info!("Thread pool THREADS: {} (requested: {})", num_threads, args.threads);
+    evaluate_env(&logger);
+    logger.info(&format!("Thread pool THREADS: {} (requested: {})", num_threads, args.threads));
 
     // Evaluate active modules
     let mut active_modules: ArrayVec<String, 20> = ArrayVec::<String, 20>::new();
@@ -894,7 +888,7 @@ fn main() {
         if args.nofs && module.to_string() == "FileScan" { continue; }
         active_modules.insert(active_modules.len(), module.to_string());
     }
-    log::info!("Active modules MODULES: {:?}", active_modules);
+    logger.info(&format!("Active modules MODULES: {:?}", active_modules));
 
     // Set some default values
     // default target folder
@@ -927,39 +921,40 @@ fn main() {
     };
     
     // Print scan configuration limits
-    log::info!("Scan limits MAX_FILE_SIZE: {} bytes ({:.1} MB)", 
-        scan_config.max_file_size, 
-        scan_config.max_file_size as f64 / 1_000_000.0);
-    log::info!("Scan limits SCAN_ALL_TYPES: {} SCAN_ALL_DRIVES: {}", 
-        scan_config.scan_all_types, 
-        scan_config.scan_all_drives);
+    logger.info_w("Scan limits", &[
+        ("MAX_FILE_SIZE", &format!("{} bytes ({:.1} MB)", scan_config.max_file_size, scan_config.max_file_size as f64 / 1_000_000.0)),
+    ]);
+    logger.info_w("Scan limits", &[
+        ("SCAN_ALL_TYPES", &scan_config.scan_all_types.to_string()),
+        ("SCAN_ALL_DRIVES", &scan_config.scan_all_drives.to_string())
+    ]);
     if !scan_config.scan_all_types {
-        log::info!("Scanned extensions: .exe, .dll, .bat, .ps1, .asp, .aspx, .jsp, .jspx, .php, .plist, .sh, .vbs, .js, .dmp, .py, .msix");
-        log::info!("Scanned file types: Executable, DLL, ISO, ZIP, LNK, CHM, PCAP and more (use --scan-all-files to scan all)");
+        logger.info("Scanned extensions: .exe, .dll, .bat, .ps1, .asp, .aspx, .jsp, .jspx, .php, .plist, .sh, .vbs, .js, .dmp, .py, .msix");
+        logger.info("Scanned file types: Executable, DLL, ISO, ZIP, LNK, CHM, PCAP and more (use --scan-all-files to scan all)");
     }
     if !scan_config.scan_all_drives {
-        log::info!("Excluded paths: /proc, /dev, /sys/kernel, /media, /volumes, /Volumes, CloudStorage (use --scan-all-drives to include)");
+        logger.info("Excluded paths: /proc, /dev, /sys/kernel, /media, /volumes, /Volumes, CloudStorage (use --scan-all-drives to include)");
     }
 
     // Initialize IOCs 
-    log::info!("Initialize hash IOCs ...");
-    let hash_iocs = initialize_hash_iocs();
-    let hash_collections = organize_hash_iocs(hash_iocs, "hash IOCs");
-    log::info!("Initialize false positive hash IOCs ...");
-    let fp_hash_iocs = initialize_false_positive_hash_iocs();
-    let fp_hash_collections = organize_hash_iocs(fp_hash_iocs, "false positive hash IOCs");
-    log::info!("Initialize filename IOCs ...");
-    let filename_iocs = initialize_filename_iocs();
-    log::info!("Initialize C2 IOCs ...");
-    let c2_iocs = initialize_c2_iocs();
+    logger.info("Initialize hash IOCs ...");
+    let hash_iocs = initialize_hash_iocs(&logger);
+    let hash_collections = organize_hash_iocs(hash_iocs, "hash IOCs", &logger);
+    logger.info("Initialize false positive hash IOCs ...");
+    let fp_hash_iocs = initialize_false_positive_hash_iocs(&logger);
+    let fp_hash_collections = organize_hash_iocs(fp_hash_iocs, "false positive hash IOCs", &logger);
+    logger.info("Initialize filename IOCs ...");
+    let filename_iocs = initialize_filename_iocs(&logger);
+    logger.info("Initialize C2 IOCs ...");
+    let c2_iocs = initialize_c2_iocs(&logger);
 
     // Initialize the YARA rules
-    log::info!("Initializing YARA rules ...");
-    let compiled_rules = match initialize_yara_rules() {
+    logger.info("Initializing YARA rules ...");
+    let compiled_rules = match initialize_yara_rules(&logger) {
         Ok(rules) => rules,
         Err(e) => {
-            log::error!("Failed to initialize YARA rules: {}", e);
-            log::error!("Please check signature-base availability at {}", SIGNATURE_SOURCE);
+            logger.error(&format!("Failed to initialize YARA rules: {}", e));
+            logger.error(&format!("Please check signature-base availability at {}", SIGNATURE_SOURCE));
             std::process::exit(1);
         }
     };
@@ -984,17 +979,17 @@ fn main() {
     for module in modules {
         // Check if we should stop before starting next module
         if scan_state.should_stop() {
-            log::info!("Scan aborted by user.");
+            logger.info("Scan aborted by user.");
             break;
         }
 
         if active_modules.contains(&module.name().to_string()) {
             if module.name() == "ProcessCheck" {
-                 log::info!("Scanning running processes ... ");
+                 logger.info("Scanning running processes ... ");
             } else if module.name() == "FileScan" {
-                 log::info!("Scanning local file system ... ");
+                 logger.info("Scanning local file system ... ");
             } else {
-                 log::info!("Running module: {} ...", module.name());
+                 logger.info_w("Running module", &[("MODULE", module.name())]);
             }
 
             let context = ScanContext {
@@ -1004,8 +999,7 @@ fn main() {
                 fp_hash_collections: &fp_hash_collections,
                 filename_iocs: &filename_iocs,
                 c2_iocs: &c2_iocs,
-                jsonl_logger: jsonl_logger.as_ref(),
-                remote_logger: None,
+                logger: &logger,
                 scan_state: Some(scan_state.clone()),
                 target_folder: &target_folder,
             };
@@ -1032,36 +1026,27 @@ fn main() {
     let duration = end_time.signed_duration_since(start_time);
     
     // Print summary
-    log::info!("Loki-RS scan finished");
-    log::info!("Summary - Files scanned: {} Matched: {} | Processes scanned: {} Matched: {} | Alerts: {} Warnings: {} Notices: {}", 
+    let summary_msg = format!("Summary - Files scanned: {} Matched: {} | Processes scanned: {} Matched: {} | Alerts: {} Warnings: {} Notices: {}", 
         files_scanned, files_matched,
         proc_scanned, proc_matched,
         total_alerts, total_warnings, total_notices);
         
-    // Print duration and time
-    log::info!("Scan Duration: {:.2}s (Start: {}, End: {})", 
+    let duration_msg = format!("Scan Duration: {:.2}s (Start: {}, End: {})", 
         duration.num_milliseconds() as f64 / 1000.0,
         start_time.format("%Y-%m-%d %H:%M:%S"),
         end_time.format("%Y-%m-%d %H:%M:%S"));
-        
+    
+    logger.scan_end(&summary_msg, &duration_msg);
+    
     // Print output file locations
-    // Log file
-    // Check if we can find the log file
-    if let Ok(files) = logger_handle.existing_log_files(&LogfileSelector::default()) {
-        if let Some(latest_log) = files.last() {
-            log::info!("Log file written to: {}", latest_log.display());
-        } else {
-            // Fallback if vector is empty but logging is active
-            log::info!("Log file written to: ./{}_<date>_r<rotation>.log", log_file_name);
-        }
-    } else {
-        log::info!("Log file written to: ./{}_<date>_r<rotation>.log", log_file_name);
+    if let Some(path) = &log_file {
+        logger.info(&format!("Log file written to: {}", path));
+    }
+    if let Some(path) = &jsonl_file {
+        logger.info(&format!("JSONL log file written to: {}", path));
     }
     
     // Determine exit code
-    // 0 = success (no matches or only notices)
-    // 1 = error (fatal errors occurred - handled earlier)
-    // 2 = partial success (matches found but scan completed)
     let exit_code = if total_alerts > 0 || total_warnings > 0 {
         2  // Matches found
     } else {

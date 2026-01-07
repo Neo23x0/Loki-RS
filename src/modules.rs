@@ -4,8 +4,7 @@ pub mod filesystem_scan;
 use yara_x::Rules;
 use std::sync::Arc;
 use crate::{ScanConfig, HashIOCCollections, FalsePositiveHashCollections, FilenameIOC, C2IOC};
-use crate::helpers::jsonl_logger::JsonlLogger;
-use crate::helpers::remote_logger::RemoteLogger;
+use crate::helpers::unified_logger::UnifiedLogger;
 use crate::helpers::interrupt::ScanState;
 
 pub struct ScanContext<'a> {
@@ -15,8 +14,7 @@ pub struct ScanContext<'a> {
     pub fp_hash_collections: &'a FalsePositiveHashCollections,
     pub filename_iocs: &'a Vec<FilenameIOC>,
     pub c2_iocs: &'a [C2IOC],
-    pub jsonl_logger: Option<&'a JsonlLogger>,
-    pub remote_logger: Option<&'a RemoteLogger>,
+    pub logger: &'a UnifiedLogger,
     pub scan_state: Option<Arc<ScanState>>,
     pub target_folder: &'a str,
 }

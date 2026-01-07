@@ -6,7 +6,6 @@ use yara_x::{Scanner, Rules};
 use sysinfo::{System, Pid, Process, Uid, Users};
 use hex;
 use rayon::prelude::*;
-use colored::*;
 
 // Linux-specific I/O imports
 #[cfg(target_os = "linux")]
@@ -34,8 +33,7 @@ use netstat2::{get_sockets_info, AddressFamilyFlags, ProtocolFlags};
 
 use crate::{ScanConfig, GenMatch, C2IOC, check_c2_match, FilenameIOC, HashIOCCollections, find_hash_ioc};
 use crate::helpers::score::calculate_weighted_score;
-use crate::helpers::jsonl_logger::{JsonlLogger, MatchReason};
-use crate::helpers::remote_logger::RemoteLogger;
+use crate::helpers::unified_logger::{UnifiedLogger, MatchReason, LogLevel};
 use crate::helpers::throttler::{init_thread_throttler, throttle_start, throttle_end};
 use crate::helpers::interrupt::ScanState;
 
@@ -55,8 +53,7 @@ impl ScanModule for ProcessCheckModule {
             context.c2_iocs,
             context.filename_iocs,
             context.hash_collections,
-            context.jsonl_logger,
-            context.remote_logger,
+            context.logger,
             context.scan_state.as_ref()
         )
     }
@@ -69,14 +66,13 @@ pub fn scan_processes(
     c2_iocs: &[C2IOC], 
     filename_iocs: &Vec<FilenameIOC>,
     hash_collections: &HashIOCCollections,
-    jsonl_logger: Option<&JsonlLogger>, 
-    remote_logger: Option<&RemoteLogger>,
+    logger: &UnifiedLogger, 
     scan_state: Option<&Arc<ScanState>>
 ) -> (usize, usize, usize, usize, usize) {
     
     // Warn if platform is not fully supported for memory scanning
     if cfg!(target_os = "macos") {
-        log::warn!("Process memory scanning is not supported on macOS due to system protections.");
+        logger.warning("Process memory scanning is not supported on macOS due to system protections.");
     }
 
     let cpu_limit = scan_config.cpu_limit;
@@ -109,8 +105,7 @@ pub fn scan_processes(
                 c2_iocs, 
                 filename_iocs,
                 hash_collections,
-                jsonl_logger, 
-                remote_logger,
+                logger,
                 scan_state
             );
             throttle_end();
@@ -140,8 +135,7 @@ fn process_single_process(
     c2_iocs: &[C2IOC], 
     filename_iocs: &Vec<FilenameIOC>,
     hash_collections: &HashIOCCollections,
-    jsonl_logger: Option<&JsonlLogger>,
-    remote_logger: Option<&RemoteLogger>,
+    logger: &UnifiedLogger,
     scan_state: Option<&Arc<ScanState>>
 ) -> (usize, usize, usize, usize, usize) {
     let mut processes_scanned = 0;
@@ -176,20 +170,74 @@ fn process_single_process(
     let username = user_id.and_then(|uid| user_map.get(uid)).map(|s| s.as_str()).unwrap_or("unknown");
     let ppid = process.parent().map(|p| p.as_u32().to_string()).unwrap_or("0".to_string());
     let status = format!("{:?}", process.status());
+    
+    // Extended Metadata
+    let start_time = Some(process.start_time() as i64); // seconds since epoch
+    let run_time_secs = process.run_time(); // seconds
+    let run_time_str = format_runtime(run_time_secs);
+    let memory_bytes = process.memory();
+    let cpu_usage = process.cpu_usage();
+    
+    // Network info
+    let (connections, listening_ports) = get_process_network_info(pid_u32);
+    let connection_count = connections.len();
+    
+    // Compute hashes (if executable is readable)
+    let mut md5_hash = None;
+    let mut sha1_hash = None;
+    let mut sha256_hash = None;
+    
+    if let Some(exe_path) = process.exe() {
+        if exe_path.exists() && exe_path.is_file() {
+            // Best effort read
+            if let Ok(data) = std::fs::read(exe_path) {
+                md5_hash = Some(format!("{:x}", md5::compute(&data)));
+                sha1_hash = Some(hex::encode(Sha1::new().chain_update(&data).finalize()));
+                sha256_hash = Some(hex::encode(Sha256::new().chain_update(&data).finalize()));
+            }
+        }
+    }
 
-    // Log detailed process info at INFO level as requested
-    let info_output = format!("{}: {}\n      {}: {} {}: {} {}: {} {}: {}\n      {}: {}\n", 
-        "ANALYZED".green(), proc_name_str.white(),
-        "PID".green(), pid_u32.to_string().white(),
-        "PPID".green(), ppid.white(),
-        "USER".green(), username.white(),
-        "STATUS".green(), status.white(),
-        "CMD".green(), if cmd_line.len() > 100 { format!("{}...", &cmd_line[..97]) } else { cmd_line.clone() }.white()
-    );
-    log::info!("{}", info_output);
+    // Log detailed process info at INFO level using structured context
+    // Console output will apply colors; JSONL/PlainText will be clean
+    let cmd_display = if cmd_line.len() > 100 { format!("{}...", &cmd_line[..97]) } else { cmd_line.clone() };
+    let mem_display = format!("{:.2} MB", memory_bytes as f64 / 1024.0 / 1024.0);
+    let cpu_display = format!("{:.2}%", cpu_usage);
+    let start_display = start_time.map(|t| t.to_string()).unwrap_or_else(|| "?".to_string());
+    let ports_display = if listening_ports.is_empty() { 
+        "none".to_string() 
+    } else {
+        let mut p_str = listening_ports.iter().take(20).map(|p| p.to_string()).collect::<Vec<_>>().join(", ");
+        if listening_ports.len() > 20 { p_str.push_str(", [...]"); }
+        p_str
+    };
+    
+    // Build context for structured logging
+    let mut context: Vec<(&str, String)> = vec![
+        ("PID", pid_u32.to_string()),
+        ("PPID", ppid.clone()),
+        ("USER", username.to_string()),
+        ("STATUS", status.clone()),
+        ("CMD", cmd_display),
+        ("RUNTIME", run_time_str.clone()),
+        ("START", start_display),
+        ("MEM", mem_display),
+        ("CPU", cpu_display),
+    ];
+    
+    if let Some(h) = &md5_hash { context.push(("MD5", h.clone())); }
+    if let Some(h) = &sha1_hash { context.push(("SHA1", h.clone())); }
+    if let Some(h) = &sha256_hash { context.push(("SHA256", h.clone())); }
+    context.push(("CONN", connection_count.to_string()));
+    context.push(("LISTEN", ports_display));
+    
+    // Convert to the format expected by info_w
+    let context_refs: Vec<(&str, &str)> = context.iter().map(|(k, v)| (*k, v.as_str())).collect();
+    
+    logger.info_w(&format!("ANALYZED: {}", proc_name_str), &context_refs);
 
     // Debug output
-    log::debug!("Trying to scan process PID: {} PROC_NAME: {}", pid_u32, proc_name_str);
+    logger.debug(&format!("Trying to scan process PID: {} PROC_NAME: {}", pid_u32, proc_name_str));
     
     // Count this as a process we attempted to scan
     processes_scanned += 1;
@@ -231,11 +279,16 @@ fn process_single_process(
                 };
                 
                 if !is_fp {
-                    let match_message = format!("Filename IOC matched in {}\n         PATTERN: {}\n         DESC: {}", 
-                        match_source, fioc.pattern, fioc.description);
+                    let match_message = format!("Filename IOC matched in {} PATTERN: {}", match_source, fioc.pattern);
                     proc_matches.insert(
                         proc_matches.len(),
-                        GenMatch { message: match_message, score: fioc.score }
+                        GenMatch { 
+                            message: match_message, 
+                            score: fioc.score,
+                            description: Some(fioc.description.clone()),
+                            author: None,
+                            matched_strings: None,
+                        }
                     );
                 }
             }
@@ -244,41 +297,35 @@ fn process_single_process(
 
     // 2. Hash IOCs (Executable File)
     if !proc_matches.is_full() {
-        if let Some(exe_path) = process.exe() {
-            if exe_path.exists() && exe_path.is_file() {
-                 // Reuse hashing logic, but we need to be careful with reading files of running processes on Windows (might be locked)
-                 // fs::read should work for most executables as they are usually open with SHARE_READ
-                 match std::fs::read(exe_path) {
-                    Ok(data) => {
-                        let md5_value = format!("{:x}", md5::compute(&data));
-                        let sha1_value = hex::encode(Sha1::new().chain_update(&data).finalize());
-                        let sha256_value = hex::encode(Sha256::new().chain_update(&data).finalize());
-                        
-                        // Check against hash IOCs
-                        let mut hash_match = None;
-                        
-                        if let Some(ioc) = find_hash_ioc(&md5_value, &hash_collections.md5_iocs) {
-                            hash_match = Some(ioc);
-                        } else if let Some(ioc) = find_hash_ioc(&sha1_value, &hash_collections.sha1_iocs) {
-                            hash_match = Some(ioc);
-                        } else if let Some(ioc) = find_hash_ioc(&sha256_value, &hash_collections.sha256_iocs) {
-                            hash_match = Some(ioc);
-                        }
-                        
-                        if let Some(ioc) = hash_match {
-                            let match_message = format!("Process Executable Hash Match\n         HASH: {}\n         DESC: {}", 
-                                ioc.hash_value, ioc.description);
-                            proc_matches.insert(
-                                proc_matches.len(),
-                                GenMatch { message: match_message, score: ioc.score }
-                            );
-                        }
-                    },
-                    Err(e) => {
-                        log::trace!("Could not read process executable for hashing PID: {} ERROR: {:?}", pid_u32, e);
-                    }
-                 }
+        // Use pre-calculated hashes
+        let mut hash_match = None;
+        
+        if let Some(val) = &md5_hash {
+            if let Some(ioc) = find_hash_ioc(val, &hash_collections.md5_iocs) { hash_match = Some(ioc); }
+        }
+        if hash_match.is_none() {
+            if let Some(val) = &sha1_hash {
+                if let Some(ioc) = find_hash_ioc(val, &hash_collections.sha1_iocs) { hash_match = Some(ioc); }
             }
+        }
+        if hash_match.is_none() {
+            if let Some(val) = &sha256_hash {
+                if let Some(ioc) = find_hash_ioc(val, &hash_collections.sha256_iocs) { hash_match = Some(ioc); }
+            }
+        }
+        
+        if let Some(ioc) = hash_match {
+            let match_message = format!("Process Executable Hash Match HASH: {}", ioc.hash_value);
+            proc_matches.insert(
+                proc_matches.len(),
+                GenMatch { 
+                    message: match_message, 
+                    score: ioc.score,
+                    description: Some(ioc.description.clone()),
+                    author: None,
+                    matched_strings: None,
+                }
+            );
         }
     }
 
@@ -292,7 +339,7 @@ fn process_single_process(
 
     if !mem_data.is_empty() {
         if let Ok(scan_results) = scanner.scan(&mem_data) {
-            log::trace!("YARA-X scan result for PID: {} PROC_NAME: {} RESULT: {:?}", pid_u32, proc_name_str, scan_results);
+            logger.debug(&format!("YARA-X scan result for PID: {} PROC_NAME: {} RESULT: {:?}", pid_u32, proc_name_str, scan_results));
             
             for matching_rule in scan_results.matching_rules() {
                 if !proc_matches.is_full() {
@@ -346,32 +393,17 @@ fn process_single_process(
                         }
                     }
                     
-                    let mut match_message = format!("YARA-X match with rule {}", rule_id);
-                    if !description.is_empty() {
-                        match_message.push_str(&format!("\n         DESC: {}", description));
-                    }
-                    if !author.is_empty() {
-                        match_message.push_str(&format!("\n         AUTHOR: {}", author));
-                    }
-                    if !matched_strings.is_empty() {
-                        let mut strings_display = Vec::new();
-                        for s in matched_strings.iter().take(3) {
-                            let truncated = if s.len() > 140 {
-                                format!("{}...", &s[..137])
-                            } else {
-                                s.clone()
-                            };
-                            strings_display.push(truncated);
-                        }
-                        match_message.push_str(&format!("\n         STRINGS: {}", strings_display.join(" ")));
-                        if matched_strings.len() > 3 {
-                            match_message.push_str(&format!(" (and {} more)", matched_strings.len() - 3));
-                        }
-                    }
+                    let match_message = format!("YARA-X match with rule {}", rule_id);
                     
                     proc_matches.insert(
                         proc_matches.len(), 
-                        GenMatch { message: match_message, score }
+                        GenMatch { 
+                            message: match_message, 
+                            score,
+                            description: if description.is_empty() { None } else { Some(description) },
+                            author: if author.is_empty() { None } else { Some(author) },
+                            matched_strings: if matched_strings.is_empty() { None } else { Some(matched_strings) },
+                        }
                     );
                 }
             }
@@ -381,20 +413,22 @@ fn process_single_process(
     // ------------------------------------------------------------
     // 4. C2 IOC Matching - Check process network connections
     if !proc_matches.is_full() {
-        let connections = get_process_connections(pid_u32);
-        for (remote_ip, remote_port) in connections {
-            if let Some(c2_ioc) = check_c2_match(&remote_ip, c2_iocs) {
-                let match_message = format!("C2 IOC match in remote address\n         IP: {}\n         PORT: {}\n         DESC: {}", 
-                    remote_ip, remote_port, c2_ioc.description);
+        // reuse connections from earlier
+        for (remote_ip, remote_port) in &connections {
+            if let Some(c2_ioc) = check_c2_match(remote_ip, c2_iocs) {
+                let match_message = format!("C2 IOC match in remote address IP: {} PORT: {}", remote_ip, remote_port);
                 proc_matches.insert(
                     proc_matches.len(),
                     GenMatch {
                         message: match_message,
-                        score: c2_ioc.score
+                        score: c2_ioc.score,
+                        description: Some(c2_ioc.description.clone()),
+                        author: None,
+                        matched_strings: None,
                     }
                 );
-                log::trace!("C2 IOC match found PID: {} PROC_NAME: {} REMOTE: {}:{}", 
-                    pid_u32, proc_name_str, remote_ip, remote_port);
+                logger.debug(&format!("C2 IOC match found PID: {} PROC_NAME: {} REMOTE: {}:{}", 
+                    pid_u32, proc_name_str, remote_ip, remote_port));
             }
         }
     }
@@ -406,99 +440,50 @@ fn process_single_process(
         let sub_scores: Vec<i16> = proc_matches.iter().map(|m| m.score).collect();
         let total_score = calculate_weighted_score(&sub_scores);
         
-        let message_level = if total_score >= scan_config.alert_threshold as f64 {
+        let log_level = if total_score >= scan_config.alert_threshold as f64 {
             alert_count += 1;
             if let Some(state) = scan_state { state.add_alerts(1); }
-            "ALERT"
+            LogLevel::Alert
         } else if total_score >= scan_config.warning_threshold as f64 {
             warning_count += 1;
             if let Some(state) = scan_state { state.add_warnings(1); }
-            "WARNING"
+            LogLevel::Warning
         } else if total_score >= scan_config.notice_threshold as f64 {
             notice_count += 1;
             if let Some(state) = scan_state { state.add_notices(1); }
-            "NOTICE"
+            LogLevel::Notice
         } else {
-            log::debug!("Process match below notice threshold PID: {} SCORE: {:.2}", pid_u32, total_score);
+            logger.debug(&format!("Process match below notice threshold PID: {} SCORE: {:.2}", pid_u32, total_score));
             return (processes_scanned, 0, 0, 0, 0);
         };
         
         let reasons_to_show = std::cmp::min(proc_matches.len(), scan_config.max_reasons);
-        let shown_reasons: Vec<&GenMatch> = proc_matches.iter().take(reasons_to_show).collect();
+        let shown_reasons: Vec<MatchReason> = proc_matches.iter().take(reasons_to_show)
+            .map(|r| MatchReason { 
+                message: r.message.clone(), 
+                score: r.score,
+                description: r.description.clone(),
+                author: r.author.clone(),
+                matched_strings: r.matched_strings.clone(),
+            })
+            .collect();
         
-        let colorize = |s: &str| -> ColoredString {
-            match message_level {
-                "ALERT" => s.red(),
-                "WARNING" => s.yellow(),
-                "NOTICE" => s.cyan(),
-                _ => s.normal(),
-            }
-        };
-
-        let mut output = format!("{}: {}\n      {}: {} {}: {} {}: {}\n      {}: {}\n", 
-            colorize("PROCESS"),
-            proc_name_str.white(), 
-            colorize("PID"),
-            pid_u32.to_string().white(),
-            colorize("SCORE"),
-            total_score.round().to_string().white(),
-            colorize("USER"),
-            username.white(),
-            colorize("CMD"),
-            if cmd_line.len() > 100 { format!("{}...", &cmd_line[..97]) } else { cmd_line.clone() }.white()
+        // Unified Logging call
+        logger.process_match(
+            log_level,
+            pid_u32,
+            &proc_name_str,
+            total_score,
+            shown_reasons,
+            // Extended metadata
+            (md5_hash, sha1_hash, sha256_hash),
+            start_time,
+            Some(run_time_str),
+            Some(memory_bytes),
+            Some(cpu_usage),
+            Some(connection_count),
+            Some(listening_ports)
         );
-        
-        for (i, reason) in shown_reasons.iter().enumerate() {
-            output.push_str(&format!("      {}_{}: {}\n         {}: {}\n", 
-                colorize("REASON"), 
-                i + 1, 
-                reason.message.white(), 
-                colorize("SUBSCORE"),
-                reason.score.to_string().white()));
-        }
-        
-        if proc_matches.len() > reasons_to_show {
-            output.push_str(&format!("      (and {} more reasons)\n", proc_matches.len() - reasons_to_show));
-        }
-        
-        match message_level {
-            "ALERT" => log::error!("{} {}", message_level, output),
-            "WARNING" => log::warn!("{} {}", message_level, output),
-            "NOTICE" => log::info!("{} {}", message_level, output),
-            _ => log::debug!("{} {}", message_level, output),
-        }
-        
-        if let Some(logger) = jsonl_logger {
-            let jsonl_reasons: Vec<MatchReason> = shown_reasons.iter()
-                .map(|r| MatchReason {
-                    message: r.message.clone(),
-                    score: r.score,
-                })
-                .collect();
-            let _ = logger.log_process_match(
-                message_level,
-                pid_u32,
-                &proc_name_str,
-                total_score,
-                jsonl_reasons,
-            );
-        }
-        
-        if let Some(logger) = remote_logger {
-            let remote_reasons: Vec<MatchReason> = shown_reasons.iter()
-                .map(|r| MatchReason {
-                    message: r.message.clone(),
-                    score: r.score,
-                })
-                .collect();
-            logger.log_process_match(
-                message_level,
-                pid_u32,
-                &proc_name_str,
-                total_score,
-                &remote_reasons,
-            );
-        }
     }
     
     // Clear current element from status
@@ -509,35 +494,42 @@ fn process_single_process(
     (processes_scanned, processes_matched, alert_count, warning_count, notice_count)
 }
 
-// Cross-platform process connections using netstat2
-fn get_process_connections(pid: u32) -> Vec<(String, u16)> {
+// Helper to get process network info (connections and listening ports)
+fn get_process_network_info(pid: u32) -> (Vec<(String, u16)>, Vec<u16>) {
     let mut connections = Vec::new();
+    let mut listening_ports = Vec::new();
+    
     let af_flags = AddressFamilyFlags::IPV4 | AddressFamilyFlags::IPV6;
     let proto_flags = ProtocolFlags::TCP | ProtocolFlags::UDP;
     
     if let Ok(sockets) = get_sockets_info(af_flags, proto_flags) {
         for socket in sockets {
             if socket.associated_pids.contains(&pid) {
-                // Determine remote address
-                let (remote_ip, remote_port) = match socket.protocol_socket_info {
+                match socket.protocol_socket_info {
                     netstat2::ProtocolSocketInfo::Tcp(tcp_info) => {
-                        (tcp_info.remote_addr.to_string(), tcp_info.remote_port)
+                        if tcp_info.state == netstat2::TcpState::Listen {
+                            listening_ports.push(tcp_info.local_port);
+                        } else {
+                            // Remote connection
+                            let remote_ip = tcp_info.remote_addr.to_string();
+                            // Skip localhost and 0.0.0.0
+                            if remote_ip != "0.0.0.0" && remote_ip != "127.0.0.1" && remote_ip != "::1" && remote_ip != "::" {
+                                connections.push((remote_ip, tcp_info.remote_port));
+                            }
+                        }
                     },
                     netstat2::ProtocolSocketInfo::Udp(_udp_info) => {
-                        // UDP is connectionless, but we can check for bound remote addresses if available
-                        // Often UDP sockets are 0.0.0.0:*
-                         continue; // Skip UDP for now as C2 matching usually targets specific remote TCP connections
+                         // Skip UDP for connections
                     }
-                };
-                
-                // Skip localhost and 0.0.0.0
-                if remote_ip != "0.0.0.0" && remote_ip != "127.0.0.1" && remote_ip != "::1" && remote_ip != "::" {
-                    connections.push((remote_ip, remote_port));
                 }
             }
         }
     }
-    connections
+    
+    listening_ports.sort();
+    listening_ports.dedup();
+    
+    (connections, listening_ports)
 }
 
 // Platform-specific memory reading
@@ -681,4 +673,13 @@ fn read_process_memory(pid: u32) -> Vec<u8> {
 #[cfg(not(any(target_os = "windows", target_os = "linux")))]
 fn read_process_memory(_pid: u32) -> Vec<u8> {
     Vec::new()
+}
+
+// Helper to format runtime in d:h:m:s
+fn format_runtime(seconds: u64) -> String {
+    let days = seconds / 86400;
+    let hours = (seconds % 86400) / 3600;
+    let minutes = (seconds % 3600) / 60;
+    let secs = seconds % 60;
+    format!("{}d:{}h:{}m:{}s", days, hours, minutes, secs)
 }

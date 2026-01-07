@@ -3,7 +3,10 @@ use std::io;
 use std::path::Path;
 use std::process::{Command, Stdio};
 use serde_json::Value;
+use colored::*;
+use dialoguer::{Select, theme::ColorfulTheme};
 
+const VERSION: &str = env!("CARGO_PKG_VERSION");
 const SIGNATURE_BASE_URL: &str = "https://github.com/Neo23x0/signature-base/archive/master.tar.gz";
 const YARA_FORGE_URL: &str = "https://github.com/YARAHQ/yara-forge/releases/latest/download/yara-forge-rules-core.zip";
 const LOKI_RELEASES_URL: &str = "https://api.github.com/repos/Neo23x0/Loki-RS/releases";
@@ -11,48 +14,118 @@ const SIGNATURES_DIR: &str = "./signatures";
 const TEMP_DIR: &str = "./tmp";
 
 fn main() {
+    print_banner();
+    
     let args: Vec<String> = std::env::args().collect();
     
     if args.len() < 2 {
-        print_usage();
-        std::process::exit(1);
+        if let Err(e) = interactive_mode() {
+            log_error(&format!("Interactive mode error: {}", e));
+            std::process::exit(1);
+        }
+        return;
     }
 
     let command = &args[1];
     match command.as_str() {
         "update" => {
-            println!("[+] Updating signatures...");
+            log_step("Starting signature update...");
             if let Err(e) = update_signatures() {
-                eprintln!("[!] Error updating signatures: {}", e);
+                log_error(&format!("Error updating signatures: {}", e));
                 std::process::exit(1);
             }
-            println!("[✓] Signatures updated successfully!");
+            log_success("Signatures updated successfully!");
         }
         "upgrade" => {
-            println!("[+] Upgrading Loki-RS...");
+            log_step("Starting Loki-RS upgrade...");
             if let Err(e) = upgrade_loki() {
-                eprintln!("[!] Error upgrading Loki-RS: {}", e);
+                log_error(&format!("Error upgrading Loki-RS: {}", e));
                 std::process::exit(1);
             }
-            println!("[✓] Loki-RS upgraded successfully!");
+            log_success("Loki-RS upgraded successfully!");
+        }
+        "--help" | "-h" => {
+            print_usage();
         }
         _ => {
-            eprintln!("[!] Unknown command: {}", command);
+            log_error(&format!("Unknown command: {}", command));
             print_usage();
             std::process::exit(1);
         }
     }
 }
 
-fn print_usage() {
-    println!("Loki-RS Utility Tool");
+fn print_banner() {
+    println!("{}", "    __    ____  __ __ ____   __  __ __  _ __".bright_green());
+    println!("{}", "   / /   / __ \\/ //_//  _/  / / / // /_(_) /".bright_green());
+    println!("{}", "  / /   / / / / ,<   / /   / / / // __/ / / ".bright_green());
+    println!("{}", " / /___/ /_/ / /| |_/ /   / /_/ // /_/ / /  ".bright_green());
+    println!("{}", "/_____/\\____/_/ |_/___/   \\____/ \\__/_/_/   ".bright_green());
     println!();
+    println!("   {} v{}", "Loki-RS Utility".bold().bright_green(), VERSION);
+    println!("   {}", "Florian Roth 2026".dimmed());
+    println!();
+}
+
+fn print_usage() {
     println!("Usage: loki-util <command>");
     println!();
     println!("Commands:");
-    println!("  update   - Update signatures (IOCs and YARA rules)");
-    println!("  upgrade  - Update Loki-RS program and signatures");
+    println!("  {}   - Update signatures (IOCs and YARA rules)", "update".green());
+    println!("  {}  - Update Loki-RS program and signatures", "upgrade".green());
     println!();
+}
+
+fn log_info(msg: &str) {
+    println!(" {} {}", "[*]".blue(), msg);
+}
+
+fn log_success(msg: &str) {
+    println!(" {} {}", "[+]".green(), msg);
+}
+
+fn log_error(msg: &str) {
+    eprintln!(" {} {}", "[!]".red(), msg);
+}
+
+fn log_warn(msg: &str) {
+    println!(" {} {}", "[!]".yellow(), msg);
+}
+
+fn log_step(msg: &str) {
+    println!(" {} {}", "[>]".cyan(), msg);
+}
+
+fn interactive_mode() -> Result<(), Box<dyn std::error::Error>> {
+    let options = vec![
+        "Update signatures",
+        "Upgrade Loki-RS",
+        "Exit"
+    ];
+
+    let selection = Select::with_theme(&ColorfulTheme::default())
+        .with_prompt("What would you like to do?")
+        .default(0)
+        .items(&options)
+        .interact()?;
+
+    match selection {
+        0 => {
+            log_step("Starting signature update...");
+            update_signatures()?;
+            log_success("Signatures updated successfully!");
+        }
+        1 => {
+            log_step("Starting Loki-RS upgrade...");
+            upgrade_loki()?;
+            log_success("Loki-RS upgraded successfully!");
+        }
+        _ => {
+            println!("Exiting...");
+        }
+    }
+    
+    Ok(())
 }
 
 fn update_signatures() -> Result<(), Box<dyn std::error::Error>> {
@@ -64,11 +137,11 @@ fn update_signatures() -> Result<(), Box<dyn std::error::Error>> {
     fs::create_dir_all(TEMP_DIR)?;
     
     // Download and extract IOCs from signature-base
-    println!("[+] Downloading IOCs from signature-base...");
+    log_info("Downloading IOCs from signature-base...");
     download_and_extract_iocs()?;
     
     // Download and extract YARA rules from yara-forge
-    println!("[+] Downloading YARA rules from yara-forge...");
+    log_info("Downloading YARA rules from yara-forge...");
     download_and_extract_yara_rules()?;
     
     // Clean up temp directory
@@ -119,7 +192,7 @@ fn download_and_extract_iocs() -> Result<(), Box<dyn std::error::Error>> {
     let iocs_source = extract_dir.join("iocs");
     if iocs_source.exists() {
         copy_directory(&iocs_source, Path::new(SIGNATURES_DIR).join("iocs").as_path())?;
-        println!("[+] IOCs updated from signature-base");
+        log_success("IOCs updated from signature-base");
     }
     
     Ok(())
@@ -163,7 +236,7 @@ fn download_and_extract_yara_rules() -> Result<(), Box<dyn std::error::Error>> {
         io::copy(&mut file, &mut outfile)?;
     }
     
-    println!("[+] YARA rules updated from yara-forge");
+    log_success("YARA rules updated from yara-forge");
     
     Ok(())
 }
@@ -281,14 +354,14 @@ fn install_updates(source_dir: &Path) -> Result<(), Box<dyn std::error::Error>> 
                 
                 // Rename current to backup
                 match fs::rename(&dst, &backup) {
-                    Ok(_) => println!("[+] Backup created: {}", backup.display()),
-                    Err(e) => println!("[!] Failed to rename {} to backup: {} (might be acceptable if we can overwrite)", target, e),
+                    Ok(_) => log_info(&format!("Backup created: {}", backup.display())),
+                    Err(e) => log_warn(&format!("Failed to rename {} to backup: {} (might be acceptable if we can overwrite)", target, e)),
                 }
             }
             
             // Copy new file
             fs::copy(&src, &dst)?;
-            println!("[+] Updated: {}", target);
+            log_success(&format!("Updated: {}", target));
             
             // Set executable permissions on Unix
             #[cfg(unix)]
@@ -310,10 +383,10 @@ fn upgrade_loki_binary() -> Result<(), Box<dyn std::error::Error>> {
         return Err("Could not determine platform (OS/Arch) for automatic update.".into());
     }
     
-    println!("[+] Detected platform: {}", platform);
+    log_info(&format!("Detected platform: {}", platform));
     
     // 1. Get latest release info
-    println!("[+] Checking for updates from GitHub...");
+    log_info("Checking for updates from GitHub...");
     let json_content = fetch_latest_release_info()?;
     let releases: Value = serde_json::from_str(&json_content)?;
     
@@ -327,7 +400,7 @@ fn upgrade_loki_binary() -> Result<(), Box<dyn std::error::Error>> {
     };
     
     let tag_name = latest_release["tag_name"].as_str().ok_or("No tag_name in release info")?;
-    println!("[+] Latest version available: {}", tag_name);
+    log_info(&format!("Latest version available: {}", tag_name));
     
     // 2. Find matching asset
     let assets = latest_release["assets"].as_array().ok_or("No assets in release info")?;
@@ -344,18 +417,18 @@ fn upgrade_loki_binary() -> Result<(), Box<dyn std::error::Error>> {
     }
     
     let download_url = download_url.ok_or(format!("No matching release found for platform: {}", platform))?;
-    println!("[+] Found matching release: {}", asset_name);
+    log_info(&format!("Found matching release: {}", asset_name));
     
     // Create temp directory
     fs::create_dir_all(TEMP_DIR)?;
 
     // 3. Download
     let archive_path = Path::new(TEMP_DIR).join(asset_name);
-    println!("[+] Downloading release...");
+    log_info("Downloading release...");
     download_file(download_url, &archive_path)?;
     
     // 4. Extract
-    println!("[+] Extracting update...");
+    log_info("Extracting update...");
     let extract_dir = Path::new(TEMP_DIR).join("update_extracted");
     fs::create_dir_all(&extract_dir)?;
     
@@ -380,12 +453,12 @@ fn fetch_latest_release_info() -> Result<String, Box<dyn std::error::Error>> {
 }
 
 fn upgrade_loki() -> Result<(), Box<dyn std::error::Error>> {
-    println!("[+] Upgrading Loki-RS via GitHub Releases...");
+    log_info("Upgrading Loki-RS via GitHub Releases...");
 
     // Attempt binary upgrade
     if let Err(e) = upgrade_loki_binary() {
-         eprintln!("[!] Automatic binary upgrade failed: {}", e);
-         eprintln!("[!] Please update Loki-RS manually.");
+         log_error(&format!("Automatic binary upgrade failed: {}", e));
+         log_error("Please update Loki-RS manually.");
          return Err(e);
     }
     
@@ -394,4 +467,3 @@ fn upgrade_loki() -> Result<(), Box<dyn std::error::Error>> {
     
     Ok(())
 }
-

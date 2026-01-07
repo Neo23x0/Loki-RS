@@ -1,4 +1,6 @@
 use std::{fs};
+use std::io::{Cursor, Read};
+use std::path::Path;
 use std::time::{UNIX_EPOCH};
 use std::sync::Arc;
 use arrayvec::ArrayVec;
@@ -12,7 +14,7 @@ use memmap2::MmapOptions;
 use walkdir::{WalkDir, DirEntry};
 use yara_x::{Scanner, Rules};
 use rayon::prelude::*;
-use colored::*;
+use zip::ZipArchive;
 
 #[cfg(windows)]
 use windows::core::{PCWSTR, HSTRING};
@@ -27,8 +29,7 @@ const DRIVE_NO_ROOT_DIR: u32 = 1;
 
 use crate::{ScanConfig, GenMatch, HashIOCCollections, FalsePositiveHashCollections, ExtVars, YaraMatch, FilenameIOC, find_hash_ioc};
 use crate::helpers::score::calculate_weighted_score;
-use crate::helpers::jsonl_logger::{JsonlLogger, MatchReason};
-use crate::helpers::remote_logger::RemoteLogger;
+use crate::helpers::unified_logger::{UnifiedLogger, MatchReason, LogLevel};
 use crate::helpers::throttler::{init_thread_throttler, throttle_start, throttle_end};
 use crate::helpers::helpers::log_access_error;
 use crate::helpers::interrupt::ScanState;
@@ -124,6 +125,7 @@ const LINUX_PATH_SKIPS_END: &'static [&'static str] = &[
 ];
 
 #[derive(Debug)]
+#[allow(dead_code)]
 struct SampleInfo {
     md5: String,
     sha1: String,
@@ -199,8 +201,7 @@ impl ScanModule for FileScanModule {
             context.hash_collections,
             context.fp_hash_collections,
             context.filename_iocs,
-            context.jsonl_logger,
-            context.remote_logger,
+            context.logger,
             context.scan_state.as_ref()
         )
     }
@@ -214,8 +215,7 @@ pub fn scan_path (
     hash_collections: &HashIOCCollections,
     fp_hash_collections: &FalsePositiveHashCollections,
     filename_iocs: &Vec<FilenameIOC>,
-    jsonl_logger: Option<&JsonlLogger>,
-    remote_logger: Option<&RemoteLogger>,
+    logger: &UnifiedLogger,
     scan_state: Option<&Arc<ScanState>>) -> (usize, usize, usize, usize, usize) {
     
     let cpu_limit = scan_config.cpu_limit;
@@ -224,12 +224,12 @@ pub fn scan_path (
     // Only check if we are NOT scanning all drives explicitly
     if !scan_config.scan_all_drives {
         if is_network_drive(target_folder) {
-            log::warn!("Skipping network drive TARGET: {}", target_folder);
+            logger.warning(&format!("Skipping network drive TARGET: {}", target_folder));
             return (0, 0, 0, 0, 0);
         }
         
         if is_cloud_or_remote_path(target_folder) {
-            log::warn!("Skipping cloud storage folder TARGET: {}", target_folder);
+            logger.warning(&format!("Skipping cloud storage folder TARGET: {}", target_folder));
             return (0, 0, 0, 0, 0);
         }
     }
@@ -255,15 +255,14 @@ pub fn scan_path (
                         hash_collections, 
                         fp_hash_collections, 
                         filename_iocs, 
-                        jsonl_logger,
-                        remote_logger,
+                        logger,
                         scan_state_ref.as_ref()
                     );
                     throttle_end();
                     result
                 },
                 Err(e) => {
-                    log_access_error("fs_object", &e, scan_config.show_access_errors);
+                    log_access_error(logger, "fs_object", &e, scan_config.show_access_errors);
                     if let Some(ref state) = scan_state_ref {
                         state.increment_errors();
                     }
@@ -293,8 +292,7 @@ fn process_file_entry(
     hash_collections: &HashIOCCollections,
     fp_hash_collections: &FalsePositiveHashCollections,
     filename_iocs: &Vec<FilenameIOC>,
-    jsonl_logger: Option<&JsonlLogger>,
-    remote_logger: Option<&RemoteLogger>,
+    logger: &UnifiedLogger,
     scan_state: Option<&Arc<ScanState>>
 ) -> (usize, usize, usize, usize, usize) {
     let mut files_scanned = 0;
@@ -308,13 +306,9 @@ fn process_file_entry(
 
     // Check interrupt state
     if let Some(state) = scan_state {
-        if state.should_stop() {
-            return (0, 0, 0, 0, 0);
-        }
-        state.wait_for_resume(); // Wait if menu is active
-        if state.should_stop() {
-            return (0, 0, 0, 0, 0);
-        }
+        if state.should_stop() { return (0, 0, 0, 0, 0); }
+        state.wait_for_resume();
+        if state.should_stop() { return (0, 0, 0, 0, 0); }
         state.set_current_element(file_path_str.to_string());
         state.increment_files();
     }
@@ -322,37 +316,31 @@ fn process_file_entry(
     // Determine if we should exclude mounted devices
     let exclude_mounted = !scan_config.scan_all_drives;
 
-
     // Cloud/Network exclusions (skip if path contains cloud keywords)
     if exclude_mounted && is_cloud_or_remote_path(&file_path_str) {
-        log::trace!("Skipping cloud storage path FILE: {}", file_path_str);
+        logger.debug(&format!("Skipping cloud storage path FILE: {}", file_path_str));
         return (0, 0, 0, 0, 0);
     }
 
     // Platform-specific path exclusions (Linux/Mac)
     if cfg!(unix) {
-        // Check start-of-path exclusions
         for skip_path in LINUX_PATH_SKIPS_START.iter() {
             if file_path_str.starts_with(skip_path) {
-                log::trace!("Skipping excluded path (start) FILE: {} MATCH: {}", file_path_str, skip_path);
+                logger.debug(&format!("Skipping excluded path (start) FILE: {} MATCH: {}", file_path_str, skip_path));
                 return (0, 0, 0, 0, 0);
             }
         }
-        
-        // Check mounted devices (if not --scan-all-drives)
         if exclude_mounted {
             for skip_path in MOUNTED_DEVICES.iter() {
                 if file_path_str.starts_with(skip_path) {
-                    log::trace!("Skipping mounted device FILE: {} MATCH: {}", file_path_str, skip_path);
+                    logger.debug(&format!("Skipping mounted device FILE: {} MATCH: {}", file_path_str, skip_path));
                     return (0, 0, 0, 0, 0);
                 }
             }
         }
-        
-        // Check end-of-path exclusions
         for skip_path in LINUX_PATH_SKIPS_END.iter() {
             if file_path_str.ends_with(skip_path) {
-                log::trace!("Skipping excluded path (end) FILE: {} MATCH: {}", file_path_str, skip_path);
+                logger.debug(&format!("Skipping excluded path (end) FILE: {} MATCH: {}", file_path_str, skip_path));
                 return (0, 0, 0, 0, 0);
             }
         }
@@ -367,391 +355,306 @@ fn process_file_entry(
     
     // Skip all elements that aren't files
     if !entry.path().is_file() { 
-        log::trace!("Skipped element that isn't a file ELEMENT: {}", entry.path().display());
+        logger.debug(&format!("Skipped element that isn't a file ELEMENT: {}", entry.path().display()));
         return (0, 0, 0, 0, 0);
     };
+    
     // Skip big files
-    let metadata_result = entry.path().symlink_metadata();
-    let metadata = match metadata_result {
-        Ok(metadata) => metadata,
+    let metadata = match entry.path().symlink_metadata() {
+        Ok(m) => m,
         Err(e) => { 
-            log_access_error(&file_path_str, &e, scan_config.show_access_errors);
+            log_access_error(logger, &file_path_str, &e, scan_config.show_access_errors);
             return (0, 0, 0, 0, 0);
         }
     };
-    let realsize_result = entry.path().size_on_disk_fast(&metadata);
-    let realsize = match realsize_result {
-        Ok(realsize) => realsize,
-        Err(e) => { 
-            log_access_error(&file_path_str, &e, scan_config.show_access_errors);
-            return (0, 0, 0, 0, 0);
-        }
-    };
+    let realsize = entry.path().size_on_disk_fast(&metadata).unwrap_or(metadata.len());
     if realsize > scan_config.max_file_size as u64 || metadata.len() > scan_config.max_file_size as u64 { 
-        log::trace!("Skipping file due to size FILE: {} SIZE: {} LOGICAL_SIZE: {} MAX_FILE_SIZE: {}", 
-        entry.path().display(), realsize, metadata.len(), scan_config.max_file_size);
+        logger.debug(&format!("Skipping file due to size FILE: {} SIZE: {} MAX_FILE_SIZE: {}", 
+        entry.path().display(), realsize, scan_config.max_file_size));
         return (0, 0, 0, 0, 0); 
     }
-    // Skip certain file types
-    let extension_raw = entry.path().extension().unwrap_or_default().to_str().unwrap();
-    // Keep extension for later use (without dot)
-    let extension = extension_raw;
     
+    // Type detection
+    let extension_raw = entry.path().extension().unwrap_or_default().to_str().unwrap_or("");
     let file_format = FileFormat::from_file(entry.path()).unwrap_or_default();
-    let file_format_desc = file_format.to_owned().to_string();
-    let file_format_extension = file_format.name();
+    let _file_format_desc = file_format.name(); 
+    let file_type_long = file_format.to_owned().to_string(); 
 
-    // Check if file should be scanned based on:
-    // 1. File type (magic header detection)
-    // 2. File extension (with leading dot to match REL_EXTS format)
-    // 3. scan_all_types flag
-    let matches_file_type = FILE_TYPES.contains(&file_format_desc.as_str());
-    let matches_extension = if extension_raw.is_empty() {
-        false
-    } else {
+    // Check if file should be scanned
+    let matches_file_type = FILE_TYPES.contains(&file_type_long.as_str());
+    let matches_extension = if extension_raw.is_empty() { false } else {
         let ext_with_dot = format!(".{}", extension_raw);
         REL_EXTS.contains(&ext_with_dot.as_str())
     };
     
     if !matches_file_type && !matches_extension && !scan_config.scan_all_types {
-        log::trace!("Skipping file due to extension or type FILE: {} EXT: {:?} TYPE: {:?}", 
-            entry.path().display(), extension_raw, file_format_desc);
+        logger.debug(&format!("Skipping file due to extension or type FILE: {} EXT: {:?} TYPE: {:?}", 
+            entry.path().display(), extension_raw, file_type_long));
         return (0, 0, 0, 0, 0);
     }
 
-    // Debug output : show every file that gets scanned
-    log::debug!("Scanning file {} TYPE: {:?}", entry.path().display(), file_format_desc);
+    logger.debug(&format!("Scanning file {} TYPE: {:?}", entry.path().display(), file_type_long));
     
-    // Increment files scanned counter - file passed all filters
-    files_scanned += 1;
-    
-    // ------------------------------------------------------------
-    // VARS
-    // Matches (all types)
-    let mut sample_matches = ArrayVec::<GenMatch, 100>::new();
-
-    // TIME STAMPS
-    let metadata = fs::metadata(entry.path()).unwrap();
-    let ts_m_result = &metadata.modified();
-    let ts_a_result = &metadata.accessed();
-    let ts_c_result = &metadata.created();
-    let msecs = match ts_m_result {
-        Ok(nsecs) => nsecs.duration_since(UNIX_EPOCH).unwrap().as_secs(),
-        Err(_) => 0u64,
-    };
-    let asecs = match ts_a_result {
-        Ok(nsecs) => nsecs.duration_since(UNIX_EPOCH).unwrap().as_secs(),
-        Err(_) => 0u64,
-    };
-    let csecs = match ts_c_result {
-        Ok(nsecs) => nsecs.duration_since(UNIX_EPOCH).unwrap().as_secs(),
-        Err(_) => 0u64,
-    };
-    let mtime = Utc.timestamp_opt(msecs as i64, 0).single().unwrap_or_else(|| Utc::now());
-    let atime = Utc.timestamp_opt(asecs as i64, 0).single().unwrap_or_else(|| Utc::now());
-    let ctime = Utc.timestamp_opt(csecs as i64, 0).single().unwrap_or_else(|| Utc::now());
-
-    // ------------------------------------------------------------
     // READ FILE
-    // Read file to data blob
-    let result = fs::File::open(&entry.path());
-    let file_handle = match &result {
-        Ok(data) => data,
+    let file = match fs::File::open(entry.path()) {
+        Ok(f) => f,
         Err(e) => { 
-            log_access_error(&file_path_str, &e, scan_config.show_access_errors);
-            return (files_scanned, 0, 0, 0, 0); // skip the rest of the analysis 
+            log_access_error(logger, &file_path_str, &e, scan_config.show_access_errors);
+            return (0, 0, 0, 0, 0); 
         }
     };
-    let mmap = match unsafe { MmapOptions::new().map(file_handle) } {
+    let mmap = match unsafe { MmapOptions::new().map(&file) } {
         Ok(m) => m,
         Err(e) => {
-            log_access_error(&file_path_str, &e, scan_config.show_access_errors);
-            return (files_scanned, 0, 0, 0, 0); // Skip this file
+            log_access_error(logger, &file_path_str, &e, scan_config.show_access_errors);
+            return (0, 0, 0, 0, 0); 
         }
     };
 
-    // ------------------------------------------------------------
-    // IOC Matching
+    // Timestamps
+    let msecs = metadata.modified().map(|t| t.duration_since(UNIX_EPOCH).unwrap_or_default().as_secs()).unwrap_or(0);
+    let asecs = metadata.accessed().map(|t| t.duration_since(UNIX_EPOCH).unwrap_or_default().as_secs()).unwrap_or(0);
+    let csecs = metadata.created().map(|t| t.duration_since(UNIX_EPOCH).unwrap_or_default().as_secs()).unwrap_or(0);
 
-    // Filename Matching
-    let file_path_str = entry.path().to_string_lossy();
+    // Scan the file itself
+    let (s, m, a, w, n) = scan_memory_buffer(
+        &mmap, &file_path_str, 
+        entry.path().file_name().map(|n| n.to_string_lossy()).unwrap_or_default().as_ref(),
+        extension_raw, &file_format.name().to_ascii_uppercase(), (msecs as i64, asecs as i64, csecs as i64),
+        compiled_rules, scan_config, hash_collections, fp_hash_collections, filename_iocs,
+        logger, scan_state, None, None
+    );
+    files_scanned += s; files_matched += m; alert_count += a; warning_count += w; notice_count += n;
+
+    // Check for archive
+    if file_format == FileFormat::Zip {
+        logger.debug(&format!("Scanning ZIP archive content: {}", file_path_str));
+        // Calculate container info for linking
+        let md5_val = format!("{:x}", md5::compute(&mmap));
+        let sha1_val = hex::encode(Sha1::new().chain_update(&mmap).finalize());
+        let sha256_val = hex::encode(Sha256::new().chain_update(&mmap).finalize());
+        let mtime = Utc.timestamp_opt(msecs as i64, 0).single().unwrap_or_else(|| Utc::now());
+        let atime = Utc.timestamp_opt(asecs as i64, 0).single().unwrap_or_else(|| Utc::now());
+        let ctime = Utc.timestamp_opt(csecs as i64, 0).single().unwrap_or_else(|| Utc::now());
+        
+        let container_info = SampleInfo {
+            md5: md5_val, sha1: sha1_val, sha256: sha256_val,
+            atime: atime.to_rfc3339(), mtime: mtime.to_rfc3339(), ctime: ctime.to_rfc3339(),
+        };
+
+        match ZipArchive::new(Cursor::new(&mmap)) {
+            Ok(mut archive) => {
+                for i in 0..archive.len() {
+                    if let Ok(mut zfile) = archive.by_index(i) {
+                        if zfile.is_file() && zfile.size() < scan_config.max_file_size as u64 {
+                            let mut buffer = Vec::with_capacity(zfile.size() as usize);
+                            if zfile.read_to_end(&mut buffer).is_ok() {
+                                let entry_name = zfile.name().to_string();
+                                let display_path = format!("{}->{}", file_path_str, entry_name);
+                                let ext = Path::new(&entry_name).extension().map(|e| e.to_string_lossy()).unwrap_or_default();
+                                
+                                let (s, m, a, w, n) = scan_memory_buffer(
+                                    &buffer, &display_path, &entry_name, &ext, "ARCHIVE_ENTRY",
+                                    (0, 0, 0), // Timestamps inside zip? zfile.last_modified()
+                                    compiled_rules, scan_config, hash_collections, fp_hash_collections, filename_iocs,
+                                    logger, scan_state, 
+                                    Some(&container_info), Some(&file_path_str)
+                                );
+                                files_scanned += s; files_matched += m; alert_count += a; warning_count += w; notice_count += n;
+                            }
+                        }
+                    }
+                }
+            },
+            Err(e) => logger.debug(&format!("Failed to open ZIP archive {}: {:?}", file_path_str, e)),
+        }
+    }
+
+    if let Some(state) = scan_state { state.clear_current_element(); }
+    (files_scanned, files_matched, alert_count, warning_count, notice_count)
+}
+
+fn scan_memory_buffer(
+    content: &[u8],
+    path_display: &str,
+    filename_str: &str,
+    extension: &str,
+    filetype: &str,
+    timestamps: (i64, i64, i64), // mtime, atime, ctime (secs)
+    compiled_rules: &Rules, 
+    scan_config: &ScanConfig, 
+    hash_collections: &HashIOCCollections,
+    fp_hash_collections: &FalsePositiveHashCollections,
+    filename_iocs: &Vec<FilenameIOC>,
+    logger: &UnifiedLogger,
+    scan_state: Option<&Arc<ScanState>>,
+    _container_info: Option<&SampleInfo>,
+    _container_path: Option<&str>,
+) -> (usize, usize, usize, usize, usize) {
+    let scanned = 1;
+    let mut matched = 0;
+    let mut alert_count = 0;
+    let mut warning_count = 0;
+    let mut notice_count = 0;
+    
+    // Convert timestamps
+    let _mtime = Utc.timestamp_opt(timestamps.0, 0).single().unwrap_or_else(|| Utc::now());
+    let _atime = Utc.timestamp_opt(timestamps.1, 0).single().unwrap_or_else(|| Utc::now());
+    let _ctime = Utc.timestamp_opt(timestamps.2, 0).single().unwrap_or_else(|| Utc::now());
+
+    let mut sample_matches = ArrayVec::<GenMatch, 100>::new();
+
+    // 1. Filename IOCs
     for fioc in filename_iocs.iter() {
         if !sample_matches.is_full() {
-            // Check if pattern matches
-            if fioc.regex.is_match(&file_path_str) {
-                // Check false positive regex if present
-                let is_false_positive = if let Some(ref fp_regex) = fioc.regex_fp {
-                    fp_regex.is_match(&file_path_str)
-                } else {
-                    false
-                };
-                
-                if !is_false_positive {
-                    let match_message = format!("File Name IOC matched\n         PATTERN: {}\n         DESC: {}", 
-                        fioc.pattern, fioc.description);
-                    sample_matches.insert(
-                        sample_matches.len(),
-                        GenMatch {
-                            message: match_message,
-                            score: fioc.score
-                        }
-                    );
-                    log::trace!("Filename IOC match FILE: {} PATTERN: {} SCORE: {}", 
-                        file_path_str, fioc.pattern, fioc.score);
-                } else {
-                    log::trace!("Filename IOC match suppressed by false positive regex FILE: {} PATTERN: {}", 
-                        file_path_str, fioc.pattern);
-                }
+            if fioc.regex.is_match(path_display) || fioc.regex.is_match(filename_str) {
+                 let is_false_positive = if let Some(ref fp_regex) = fioc.regex_fp {
+                    fp_regex.is_match(path_display) || fp_regex.is_match(filename_str)
+                 } else { false };
+                 
+                 if !is_false_positive {
+                    let match_message = format!("File Name IOC matched PATTERN: {}", fioc.pattern);
+                    sample_matches.insert(sample_matches.len(), GenMatch { 
+                        message: match_message, 
+                        score: fioc.score,
+                        description: Some(fioc.description.clone()),
+                        author: None,
+                        matched_strings: None,
+                    });
+                    logger.debug(&format!("Filename IOC match FILE: {} PATTERN: {} SCORE: {}", path_display, fioc.pattern, fioc.score));
+                 }
             }
         }
     }
 
-    // Hash Matching
-    // Generate hashes
-    let md5_value = format!("{:x}", md5::compute(&mmap));
-    let sha1_hash_array = Sha1::new()
-        .chain_update(&mmap)
-        .finalize();
-    let sha256_hash_array = Sha256::new()
-        .chain_update(&mmap)
-        .finalize();
-    let sha1_value = hex::encode(&sha1_hash_array);
-    let sha256_value = hex::encode(&sha256_hash_array);
-    //let md5_hash = hex::encode(&md5_hash_array);
-    log::trace!("Hashes of FILE: {:?} SHA256: {} SHA1: {} MD5: {}", entry.path(), sha256_value, sha1_value, md5_value);
+    // 2. Hash Calculation & Matching
+    let md5_value = format!("{:x}", md5::compute(content));
+    let sha1_value = hex::encode(Sha1::new().chain_update(content).finalize());
+    let sha256_value = hex::encode(Sha256::new().chain_update(content).finalize());
     
-    // Check false positive hashes first - if match, skip file entirely
-    let is_false_positive = find_hash_ioc(&md5_value, &fp_hash_collections.md5_iocs).is_some()
-        || find_hash_ioc(&sha1_value, &fp_hash_collections.sha1_iocs).is_some()
-        || find_hash_ioc(&sha256_value, &fp_hash_collections.sha256_iocs).is_some();
-    
-    if is_false_positive {
-        log::debug!("File skipped due to false positive hash match FILE: {:?}", entry.path());
-        return (files_scanned, 0, 0, 0, 0); // Skip this file entirely
+    // FP Check
+    if find_hash_ioc(&md5_value, &fp_hash_collections.md5_iocs).is_some() ||
+       find_hash_ioc(&sha1_value, &fp_hash_collections.sha1_iocs).is_some() ||
+       find_hash_ioc(&sha256_value, &fp_hash_collections.sha256_iocs).is_some() {
+        logger.debug(&format!("File skipped due to false positive hash match FILE: {}", path_display));
+        return (1, 0, 0, 0, 0);
     }
     
-    // Compare hashes with hash IOCs (using binary search)
+    // Hash IOCs
     if !sample_matches.is_full() {
-        // Binary search for MD5
-        if let Some(hash_ioc) = find_hash_ioc(&md5_value, &hash_collections.md5_iocs) {
-            let match_message = format!("HASH match with IOC\n         HASH: {}\n         DESC: {}", hash_ioc.hash_value, hash_ioc.description);
-            sample_matches.insert(
-                sample_matches.len(),
-                GenMatch{message: match_message, score: hash_ioc.score}
-            );
+        if let Some(ioc) = find_hash_ioc(&md5_value, &hash_collections.md5_iocs) {
+             let match_message = format!("HASH match with IOC HASH: {}", ioc.hash_value);
+             sample_matches.insert(sample_matches.len(), GenMatch{
+                 message: match_message, 
+                 score: ioc.score,
+                 description: Some(ioc.description.clone()),
+                 author: None,
+                 matched_strings: None,
+             });
         }
-        
-        // Binary search for SHA1
-        if let Some(hash_ioc) = find_hash_ioc(&sha1_value, &hash_collections.sha1_iocs) {
-            let match_message = format!("HASH match with IOC\n         HASH: {}\n         DESC: {}", hash_ioc.hash_value, hash_ioc.description);
-            sample_matches.insert(
-                sample_matches.len(),
-                GenMatch{message: match_message, score: hash_ioc.score}
-            );
+        if let Some(ioc) = find_hash_ioc(&sha1_value, &hash_collections.sha1_iocs) {
+             let match_message = format!("HASH match with IOC HASH: {}", ioc.hash_value);
+             sample_matches.insert(sample_matches.len(), GenMatch{
+                 message: match_message, 
+                 score: ioc.score,
+                 description: Some(ioc.description.clone()),
+                 author: None,
+                 matched_strings: None,
+             });
         }
-        
-        // Binary search for SHA256
-        if let Some(hash_ioc) = find_hash_ioc(&sha256_value, &hash_collections.sha256_iocs) {
-            let match_message = format!("HASH match with IOC\n         HASH: {}\n         DESC: {}", hash_ioc.hash_value, hash_ioc.description);
-            sample_matches.insert(
-                sample_matches.len(),
-                GenMatch{message: match_message, score: hash_ioc.score}
-            );
+        if let Some(ioc) = find_hash_ioc(&sha256_value, &hash_collections.sha256_iocs) {
+             let match_message = format!("HASH match with IOC HASH: {}", ioc.hash_value);
+             sample_matches.insert(sample_matches.len(), GenMatch{
+                 message: match_message, 
+                 score: ioc.score,
+                 description: Some(ioc.description.clone()),
+                 author: None,
+                 matched_strings: None,
+             });
         }
     }
     
-    // ------------------------------------------------------------
-    // SAMPLE INFO 
-    // Note: SampleInfo fields are kept for future use (logging, reporting)
-    #[allow(dead_code)]
-    let sample_info = SampleInfo {
-        md5: md5_value,
-        sha1: sha1_value,
-        sha256: sha256_value,
-        atime: atime.to_rfc3339(),
-        mtime: mtime.to_rfc3339(),
-        ctime: ctime.to_rfc3339(),
+    let _sample_info = SampleInfo {
+        md5: md5_value.clone(),
+        sha1: sha1_value.clone(),
+        sha256: sha256_value.clone(),
+        atime: _atime.to_rfc3339(),
+        mtime: _mtime.to_rfc3339(),
+        ctime: _ctime.to_rfc3339(),
     };
 
-    // ------------------------------------------------------------
-    // YARA scanning
-    // Preparing the external variables
-    let ext_vars = ExtVars{
-        filename: entry.path().file_name()
-            .map(|n| n.to_string_lossy().to_string())
-            .unwrap_or_default(),
-        filepath: entry.path().parent()
-            .map(|p| p.to_string_lossy().to_string())
-            .unwrap_or_default(),
+    // 3. YARA Scan
+    let ext_vars = ExtVars {
+        filename: filename_str.to_string(),
+        filepath: path_display.to_string(),
         extension: extension.to_string(),
-        filetype: file_format_extension.to_ascii_uppercase(),
-        owner: "".to_string(),  // TODO
+        filetype: filetype.to_string(),
+        owner: "".to_string(),
     };
-    log::trace!("Passing external variables to the scan EXT_VARS: {:?}", ext_vars);
-    // Actual scanning and result analysis
-    let yara_matches = 
-        scan_file(&compiled_rules, &mmap, scan_config, &ext_vars);
+    
+    let yara_matches = scan_file(compiled_rules, content, scan_config, &ext_vars);
     for ymatch in yara_matches.iter() {
         if !sample_matches.is_full() {
-            // Build match message with metadata
-            let mut match_message = format!("YARA match with rule {}", ymatch.rulename);
-            if !ymatch.description.is_empty() {
-                match_message.push_str(&format!("\n         DESC: {}", ymatch.description));
-            }
-            if !ymatch.author.is_empty() {
-                match_message.push_str(&format!("\n         AUTHOR: {}", ymatch.author));
-            }
-            if !ymatch.matched_strings.is_empty() {
-                // Limit string matches to first 3 and truncate long strings
-                let mut strings_display = Vec::new();
-                for s in ymatch.matched_strings.iter().take(3) {
-                    let truncated = if s.len() > 140 {
-                        format!("{}...", &s[..137])
-                    } else {
-                        s.clone()
-                    };
-                    strings_display.push(truncated);
-                }
-                match_message.push_str(&format!("\n         STRINGS: {}", strings_display.join(" ")));
-                if ymatch.matched_strings.len() > 3 {
-                    match_message.push_str(&format!(" (and {} more)", ymatch.matched_strings.len() - 3));
-                }
-            }
-            sample_matches.insert(
-                sample_matches.len(), 
-                GenMatch{message: match_message, score: ymatch.score}
-            );
+            let match_message = format!("YARA match with rule {}", ymatch.rulename);
+            sample_matches.insert(sample_matches.len(), GenMatch{
+                message: match_message, 
+                score: ymatch.score,
+                description: if ymatch.description.is_empty() { None } else { Some(ymatch.description.clone()) },
+                author: if ymatch.author.is_empty() { None } else { Some(ymatch.author.clone()) },
+                matched_strings: if ymatch.matched_strings.is_empty() { None } else { Some(ymatch.matched_strings.clone()) },
+            });
         }
     }
-    // Scan Results
+
+    // 4. Reporting
     if !sample_matches.is_empty() {
-        // File has matches
-        files_matched += 1;
-        
-        // Extract sub-scores for weighted calculation
+        matched = 1;
         let sub_scores: Vec<i16> = sample_matches.iter().map(|m| m.score).collect();
-        
-        // Calculate weighted total score
         let total_score = calculate_weighted_score(&sub_scores);
         
-        // Determine message level based on thresholds
-        let message_level = if total_score >= scan_config.alert_threshold as f64 {
+        let log_level = if total_score >= scan_config.alert_threshold as f64 {
             alert_count += 1;
             if let Some(state) = scan_state { state.add_alerts(1); }
-            "ALERT"
+            LogLevel::Alert
         } else if total_score >= scan_config.warning_threshold as f64 {
             warning_count += 1;
             if let Some(state) = scan_state { state.add_warnings(1); }
-            "WARNING"
+            LogLevel::Warning
         } else if total_score >= scan_config.notice_threshold as f64 {
             notice_count += 1;
             if let Some(state) = scan_state { state.add_notices(1); }
-            "NOTICE"
+            LogLevel::Notice
         } else {
-            // Below notice threshold, skip logging unless debug
-            log::debug!("File match below notice threshold FILE: {} SCORE: {:.2}", 
-                entry.path().display(), total_score);
-            return (files_scanned, 0, 0, 0, 0);
+            logger.debug(&format!("Match below threshold FILE: {} SCORE: {:.2}", path_display, total_score));
+            return (scanned, 0, 0, 0, 0);
         };
         
-        // Limit reasons shown
         let reasons_to_show = std::cmp::min(sample_matches.len(), scan_config.max_reasons);
-        let shown_reasons: Vec<&GenMatch> = sample_matches.iter().take(reasons_to_show).collect();
+        let shown_reasons: Vec<MatchReason> = sample_matches.iter().take(reasons_to_show)
+            .map(|m| MatchReason { 
+                message: m.message.clone(), 
+                score: m.score,
+                description: m.description.clone(),
+                author: m.author.clone(),
+                matched_strings: m.matched_strings.clone(),
+            })
+            .collect();
         
-        // Format output
-        let colorize = |s: &str| -> ColoredString {
-            match message_level {
-                "ALERT" => s.red(),
-                "WARNING" => s.yellow(),
-                "NOTICE" => s.cyan(),
-                _ => s.normal(),
-            }
-        };
-
-        let mut output = format!("{}: {}\n      {}: {} {}: {} {}: {}\n", 
-            colorize("FILE"),
-            entry.path().display().to_string().white(),
-            colorize("SCORE"),
-            total_score.round().to_string().white(),
-            colorize("TYPE"),
-            file_format_desc.white(),
-            colorize("SIZE"),
-            realsize.to_string().white());
-        
-        // Add hash info
-        output.push_str(&format!("      {}: {}\n      {}: {}\n      {}: {}\n", 
-            colorize("MD5"), sample_info.md5.white(), 
-            colorize("SHA1"), sample_info.sha1.white(), 
-            colorize("SHA256"), sample_info.sha256.white()));
-        
-        // Add reasons
-        for (i, reason) in shown_reasons.iter().enumerate() {
-            output.push_str(&format!("      {}_{}: {}\n         {}: {}\n", 
-                colorize("REASON"), 
-                i + 1, 
-                reason.message.white(), 
-                colorize("SUBSCORE"), 
-                reason.score.to_string().white()));
-        }
-        
-        if sample_matches.len() > reasons_to_show {
-            output.push_str(&format!("      (and {} more reasons)\n", sample_matches.len() - reasons_to_show));
-        }
-        
-        // Log with appropriate level
-        match message_level {
-            "ALERT" => log::error!("{} {}", message_level, output),
-            "WARNING" => log::warn!("{} {}", message_level, output),
-            "NOTICE" => log::info!("{} {}", message_level, output),
-            _ => log::debug!("{} {}", message_level, output),
-        }
-        
-        // Write to JSONL if enabled
-        if let Some(logger) = jsonl_logger {
-            let jsonl_reasons: Vec<MatchReason> = shown_reasons.iter()
-                .map(|r| MatchReason {
-                    message: r.message.clone(),
-                    score: r.score,
-                })
-                .collect();
-            let _ = logger.log_file_match(
-                message_level,
-                &entry.path().to_string_lossy(),
-                total_score,
-                &file_format_desc,
-                realsize,
-                &sample_info.md5,
-                &sample_info.sha1,
-                &sample_info.sha256,
-                jsonl_reasons,
-            );
-        }
-
-        // Send to remote logger if enabled
-        if let Some(logger) = remote_logger {
-            let remote_reasons: Vec<MatchReason> = shown_reasons.iter()
-                .map(|r| MatchReason {
-                    message: r.message.clone(),
-                    score: r.score,
-                })
-                .collect();
-            logger.log_file_match(
-                message_level,
-                &entry.path().to_string_lossy(),
-                total_score,
-                &file_format_desc,
-                &remote_reasons,
-            );
-        }
+        // Unified Logging call
+        logger.file_match(
+            log_level,
+            path_display,
+            total_score,
+            filetype,
+            content.len() as u64,
+            &md5_value,
+            &sha1_value,
+            &sha256_value,
+            shown_reasons
+        );
     }
     
-    // Clear current element from status
-    if let Some(state) = scan_state {
-        state.clear_current_element();
-    }
-
-    // Return summary statistics
-    (files_scanned, files_matched, alert_count, warning_count, notice_count)
+    (scanned, matched, alert_count, warning_count, notice_count)
 }
 
 // scan a file
