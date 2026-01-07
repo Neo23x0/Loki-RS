@@ -2,7 +2,7 @@
 
 # Loki-RS
 
-A rewrite of [Loki](https://github.com/Neo23x0/Loki) in Rust. Single binary, fast, and straightforward IOC and YARA scanning.
+A rewrite of [Loki](https://github.com/Neo23x0/Loki) in Rust. High-performance, multi-threaded YARA & IOC scanner in a single binary.
 
 **Status**: Beta. Works, but still under active development.
 

@@ -77,6 +77,11 @@ pub fn scan_processes(
 
     let cpu_limit = scan_config.cpu_limit;
     let own_pid = process::id();
+    
+    // Get own executable path to exclude all processes running the same binary
+    // This is important on Linux where child processes (e.g., signal handlers) 
+    // share the same executable but have different PIDs
+    let own_exe = std::env::current_exe().ok();
 
     // Refresh the process information
     let mut sys = System::new_all();
@@ -95,7 +100,21 @@ pub fn scan_processes(
     // Process in parallel
     let (processes_scanned, processes_matched, alert_count, warning_count, notice_count) = sys.processes()
         .par_iter()
-        .filter(|(pid, _)| pid.as_u32() != own_pid)
+        .filter(|(pid, proc)| {
+            // Skip our own process ID
+            if pid.as_u32() == own_pid {
+                return false;
+            }
+            // Skip any process running the same executable as us (child processes, signal handlers, etc.)
+            if let Some(ref our_exe) = own_exe {
+                if let Some(proc_exe) = proc.exe() {
+                    if proc_exe == our_exe.as_path() {
+                        return false;
+                    }
+                }
+            }
+            true
+        })
         .map(|(pid, process)| {
             init_thread_throttler(cpu_limit);
             throttle_start();

@@ -13,10 +13,10 @@ use chrono::Local;
 
 use yara_x::{Compiler, Rules};
 
-/// Loki-RS - Simple IOC and YARA Scanner
+/// Loki-RS - High-Performance, Multi-threaded YARA & IOC Scanner
 #[derive(Parser, Debug)]
 #[command(name = "loki")]
-#[command(about = "Loki-RS YARA and IOC Scanner", long_about = None)]
+#[command(about = "Loki-RS - High-Performance, Multi-threaded YARA & IOC Scanner", long_about = None)]
 #[command(disable_version_flag = true)]
 struct Cli {
     // =========================================================================
@@ -151,7 +151,7 @@ use crate::modules::filesystem_scan::FileScanModule;
 // Specific TODOs
 // - better error handling
 
-const VERSION: &str = "2.4.3-beta";
+const VERSION: &str = "2.4.4-beta";
 
 const SIGNATURE_SOURCE: &str = "./signatures";
 const MODULES: &'static [&'static str] = &["FileScan", "ProcessCheck"];
@@ -901,7 +901,7 @@ fn welcome_message() {
     println!("    / /  / __ \\/ //_/  _/ / __/______ ____  ___  ___ ____              ");
     println!("   / /__/ /_/ / ,< _/ /  _\\ \\/ __/ _ `/ _ \\/ _ \\/ -_) __/           ");
     println!("  /____/\\____/_/|_/___/ /___/\\__/\\_,_/_//_/_//_/\\__/_/              ");
-    println!("  Simple IOC and YARA Scanner                                           ");
+    println!("  High-Performance, Multi-threaded YARA & IOC Scanner                    ");
     println!(" ");
     println!("  Version {} (Rust)                                            ", VERSION);
     println!("  Florian Roth 2026                                                     ");

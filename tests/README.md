@@ -1,6 +1,6 @@
 # Loki-RS Beta Test Suite
 
-This directory contains comprehensive beta tests for the Loki-RS IOC and YARA scanner.
+This directory contains comprehensive beta tests for Loki-RS, a high-performance, multi-threaded YARA & IOC scanner.
 
 ## Test Structure
 

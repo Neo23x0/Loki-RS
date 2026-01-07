@@ -28,7 +28,7 @@ fi
 
 # Test 3: No arguments
 echo "Testing no arguments..."
-if ./build/loki 2>&1 | grep -q "LOKI YARA and IOC Scanner"; then
+if ./build/loki 2>&1 | grep -q "High-Performance, Multi-threaded YARA & IOC Scanner"; then
     echo "✓ No arguments: PASS (shows help)"
     test3_exit=0
 else

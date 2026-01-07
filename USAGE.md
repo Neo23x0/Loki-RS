@@ -1,6 +1,6 @@
 # Loki-RS Usage Guide
 
-Loki-RS is a simple IOC (Indicators of Compromise) and YARA scanner written in Rust.
+Loki-RS is a high-performance, multi-threaded YARA & IOC scanner written in Rust.
 
 ## Quick Start
 
@@ -29,7 +29,7 @@ Loki-RS is a simple IOC (Indicators of Compromise) and YARA scanner written in R
 ```
 Usage: loki [OPTIONS]
 
-Loki-RS YARA and IOC Scanner
+Loki-RS - High-Performance, Multi-threaded YARA & IOC Scanner
 
 Options:
   -m, --max-file-size         Maximum file size to scan (default: 10000000)
