@@ -13,7 +13,41 @@ const LOKI_RELEASES_URL: &str = "https://api.github.com/repos/Neo23x0/Loki-RS/re
 const SIGNATURES_DIR: &str = "./signatures";
 const TEMP_DIR: &str = "./tmp";
 
+// Enable ANSI escape code support on Windows
+#[cfg(windows)]
+fn enable_ansi_support() {
+    use windows::Win32::System::Console::{
+        GetStdHandle, SetConsoleMode, GetConsoleMode,
+        STD_OUTPUT_HANDLE, STD_ERROR_HANDLE, ENABLE_VIRTUAL_TERMINAL_PROCESSING,
+    };
+    
+    unsafe {
+        // Enable for stdout
+        if let Ok(handle) = GetStdHandle(STD_OUTPUT_HANDLE) {
+            let mut mode = std::mem::zeroed();
+            if GetConsoleMode(handle, &mut mode).is_ok() {
+                let _ = SetConsoleMode(handle, mode | ENABLE_VIRTUAL_TERMINAL_PROCESSING);
+            }
+        }
+        // Enable for stderr
+        if let Ok(handle) = GetStdHandle(STD_ERROR_HANDLE) {
+            let mut mode = std::mem::zeroed();
+            if GetConsoleMode(handle, &mut mode).is_ok() {
+                let _ = SetConsoleMode(handle, mode | ENABLE_VIRTUAL_TERMINAL_PROCESSING);
+            }
+        }
+    }
+}
+
+#[cfg(not(windows))]
+fn enable_ansi_support() {
+    // ANSI codes work natively on Unix-like systems
+}
+
 fn main() {
+    // Enable ANSI color support on Windows
+    enable_ansi_support();
+    
     print_banner();
     
     let args: Vec<String> = std::env::args().collect();

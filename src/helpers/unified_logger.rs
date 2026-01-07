@@ -2,6 +2,7 @@ use std::fs::{File, OpenOptions};
 use std::io::{self, Write};
 use std::net::{TcpStream, UdpSocket};
 use std::sync::Mutex;
+use std::sync::mpsc::Sender;
 use std::time::Duration;
 use std::collections::BTreeMap;
 use chrono::{DateTime, Utc};
@@ -129,6 +130,14 @@ pub struct LogEvent {
 
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reasons: Option<Vec<MatchReason>>,
+}
+
+// --- TUI Messages (defined here to avoid circular imports) ---
+
+#[derive(Debug, Clone)]
+pub enum TuiMessage {
+    Log(LogEvent),
+    ScanComplete,
 }
 
 // --- Output Trait ---
@@ -578,6 +587,26 @@ impl LogOutput for RemoteOutput {
     }
 }
 
+// --- TUI Output (sends events to TUI via channel) ---
+
+pub struct TuiLogOutput {
+    sender: Sender<TuiMessage>,
+}
+
+impl TuiLogOutput {
+    pub fn new(sender: Sender<TuiMessage>) -> Self {
+        Self { sender }
+    }
+}
+
+impl LogOutput for TuiLogOutput {
+    fn write(&self, event: &LogEvent) -> io::Result<()> {
+        // Send log event to TUI - ignore errors if receiver dropped
+        let _ = self.sender.send(TuiMessage::Log(event.clone()));
+        Ok(())
+    }
+}
+
 // --- Configuration ---
 
 pub struct RemoteConfig {
@@ -593,6 +622,7 @@ pub struct LoggerConfig {
     pub log_file: Option<String>,
     pub jsonl_file: Option<String>,
     pub remote: Option<RemoteConfig>,
+    pub tui_sender: Option<Sender<TuiMessage>>,
 }
 
 // --- Unified Logger ---
@@ -608,7 +638,11 @@ impl UnifiedLogger {
         let mut outputs: Vec<Box<dyn LogOutput>> = Vec::new();
         let hostname = get_hostname();
 
-        if config.console {
+        // Add TUI output if enabled (takes precedence over console)
+        if let Some(sender) = config.tui_sender {
+            outputs.push(Box::new(TuiLogOutput::new(sender)));
+        } else if config.console {
+            // Only add console output if TUI is not enabled
             outputs.push(Box::new(ConsoleOutput));
         }
 

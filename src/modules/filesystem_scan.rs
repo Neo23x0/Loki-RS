@@ -30,7 +30,7 @@ const DRIVE_NO_ROOT_DIR: u32 = 1;
 use crate::{ScanConfig, GenMatch, HashIOCCollections, FalsePositiveHashCollections, ExtVars, YaraMatch, FilenameIOC, find_hash_ioc};
 use crate::helpers::score::calculate_weighted_score;
 use crate::helpers::unified_logger::{UnifiedLogger, MatchReason, LogLevel};
-use crate::helpers::throttler::{init_thread_throttler, throttle_start, throttle_end};
+use crate::helpers::throttler::{init_thread_throttler, throttle_start, throttle_end_with_limit};
 use crate::helpers::helpers::log_access_error;
 use crate::helpers::interrupt::ScanState;
 
@@ -258,7 +258,11 @@ pub fn scan_path (
                         logger,
                         scan_state_ref.as_ref()
                     );
-                    throttle_end();
+                    // Use dynamic CPU limit from ScanState if available
+                    let current_cpu_limit = scan_state_ref.as_ref()
+                        .map(|s| s.get_cpu_limit())
+                        .unwrap_or(cpu_limit);
+                    throttle_end_with_limit(current_cpu_limit);
                     result
                 },
                 Err(e) => {
@@ -319,6 +323,7 @@ fn process_file_entry(
     // Cloud/Network exclusions (skip if path contains cloud keywords)
     if exclude_mounted && is_cloud_or_remote_path(&file_path_str) {
         logger.debug(&format!("Skipping cloud storage path FILE: {}", file_path_str));
+        if let Some(state) = scan_state { state.increment_skipped(); }
         return (0, 0, 0, 0, 0);
     }
 
@@ -327,6 +332,7 @@ fn process_file_entry(
         for skip_path in LINUX_PATH_SKIPS_START.iter() {
             if file_path_str.starts_with(skip_path) {
                 logger.debug(&format!("Skipping excluded path (start) FILE: {} MATCH: {}", file_path_str, skip_path));
+                if let Some(state) = scan_state { state.increment_skipped(); }
                 return (0, 0, 0, 0, 0);
             }
         }
@@ -334,6 +340,7 @@ fn process_file_entry(
             for skip_path in MOUNTED_DEVICES.iter() {
                 if file_path_str.starts_with(skip_path) {
                     logger.debug(&format!("Skipping mounted device FILE: {} MATCH: {}", file_path_str, skip_path));
+                    if let Some(state) = scan_state { state.increment_skipped(); }
                     return (0, 0, 0, 0, 0);
                 }
             }
@@ -341,6 +348,7 @@ fn process_file_entry(
         for skip_path in LINUX_PATH_SKIPS_END.iter() {
             if file_path_str.ends_with(skip_path) {
                 logger.debug(&format!("Skipping excluded path (end) FILE: {} MATCH: {}", file_path_str, skip_path));
+                if let Some(state) = scan_state { state.increment_skipped(); }
                 return (0, 0, 0, 0, 0);
             }
         }
@@ -349,13 +357,15 @@ fn process_file_entry(
     // Skip certain drives and folders (macOS/Windows)
     for skip_dir_value in ALL_DRIVE_EXCLUDES.iter() {
         if file_path_str.contains(skip_dir_value) {
+            if let Some(state) = scan_state { state.increment_skipped(); }
             return (0, 0, 0, 0, 0);
         }
     }
     
-    // Skip all elements that aren't files
+    // Skip all elements that aren't files (directories, symlinks, etc.)
     if !entry.path().is_file() { 
         logger.debug(&format!("Skipped element that isn't a file ELEMENT: {}", entry.path().display()));
+        // Don't count directories as skipped - only files
         return (0, 0, 0, 0, 0);
     };
     
@@ -371,6 +381,7 @@ fn process_file_entry(
     if realsize > scan_config.max_file_size as u64 || metadata.len() > scan_config.max_file_size as u64 { 
         logger.debug(&format!("Skipping file due to size FILE: {} SIZE: {} MAX_FILE_SIZE: {}", 
         entry.path().display(), realsize, scan_config.max_file_size));
+        if let Some(state) = scan_state { state.increment_skipped(); }
         return (0, 0, 0, 0, 0); 
     }
     
@@ -390,6 +401,7 @@ fn process_file_entry(
     if !matches_file_type && !matches_extension && !scan_config.scan_all_types {
         logger.debug(&format!("Skipping file due to extension or type FILE: {} EXT: {:?} TYPE: {:?}", 
             entry.path().display(), extension_raw, file_type_long));
+        if let Some(state) = scan_state { state.increment_skipped(); }
         return (0, 0, 0, 0, 0);
     }
 

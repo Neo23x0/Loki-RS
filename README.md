@@ -111,6 +111,7 @@ sudo ./loki --jsonl scan_results.jsonl
 | `--notice-level <SCORE>` | `40` | Score threshold for NOTICE. |
 | `--max-reasons <NUM>` | `2` | Max number of match reasons to display per hit. |
 | `--threads <NUM>` | `-2` | Number of threads. See [Threading](#threading). |
+| `--tui` | `false` | Launch interactive TUI mode. See [TUI Mode](#️-tui-mode). |
 | `--jsonl <FILE>` | `None` | Enable structured JSONL logging to file. |
 | `--debug` | `false` | Show debug information. |
 | `--trace` | `false` | Show verbose trace output. |
@@ -138,6 +139,50 @@ sudo ./loki --threads 1
 # High-performance systems (use all available cores)
 sudo ./loki --threads 0
 ```
+
+## 🖥️ TUI Mode
+
+Loki-RS includes an interactive Terminal User Interface (TUI) for real-time monitoring and control of scans.
+
+### Launching the TUI
+
+```bash
+# Linux/macOS
+sudo ./loki --tui --folder /path/to/scan
+
+# Windows (Run as Administrator)
+loki.exe --tui --folder C:\path\to\scan
+```
+
+### Features
+
+The TUI provides:
+
+*   **Real-time log output** with color-coded severity levels
+*   **Live statistics** showing files scanned, alerts, warnings, and scan duration
+*   **Scan settings panel** displaying current configuration
+*   **Thread activity overlay** showing what each thread is currently processing
+*   **Interactive controls** for pause/resume, skip, and CPU throttling
+
+### Keyboard Shortcuts
+
+| Key | Action |
+|-----|--------|
+| `q` | Quit the application |
+| `p` | Pause/Resume the scan |
+| `s` | Skip current elements (all threads) |
+| `t` | Toggle thread activity overlay |
+| `+` / `-` | Increase/Decrease CPU limit (5% steps) |
+| `↑` / `↓` | Scroll log output |
+| `Page Up` / `Page Down` | Scroll log output (fast) |
+| `Home` / `End` | Jump to start/end of logs |
+| `Space` | Toggle auto-scroll |
+
+### Screenshots
+
+![Loki TUI Screenshot 1](./images/loki-tui-1.png)
+
+![Loki TUI Screenshot 2](./images/loki-tui-2.png)
 
 ## 📊 Scoring & Output
 

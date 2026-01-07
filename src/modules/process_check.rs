@@ -34,7 +34,7 @@ use netstat2::{get_sockets_info, AddressFamilyFlags, ProtocolFlags};
 use crate::{ScanConfig, GenMatch, C2IOC, check_c2_match, FilenameIOC, HashIOCCollections, find_hash_ioc};
 use crate::helpers::score::calculate_weighted_score;
 use crate::helpers::unified_logger::{UnifiedLogger, MatchReason, LogLevel};
-use crate::helpers::throttler::{init_thread_throttler, throttle_start, throttle_end};
+use crate::helpers::throttler::{init_thread_throttler, throttle_start, throttle_end_with_limit};
 use crate::helpers::interrupt::ScanState;
 
 use crate::modules::{ScanModule, ScanContext, ModuleResult};
@@ -89,6 +89,9 @@ pub fn scan_processes(
         user_map.insert(user.id().clone(), user.name().to_string());
     }
     
+    // Clone scan_state for use in parallel iteration
+    let scan_state_ref = scan_state.cloned();
+    
     // Process in parallel
     let (processes_scanned, processes_matched, alert_count, warning_count, notice_count) = sys.processes()
         .par_iter()
@@ -106,9 +109,13 @@ pub fn scan_processes(
                 filename_iocs,
                 hash_collections,
                 logger,
-                scan_state
+                scan_state_ref.as_ref()
             );
-            throttle_end();
+            // Use dynamic CPU limit from ScanState if available
+            let current_cpu_limit = scan_state_ref.as_ref()
+                .map(|s| s.get_cpu_limit())
+                .unwrap_or(cpu_limit);
+            throttle_end_with_limit(current_cpu_limit);
             result
         })
         .reduce(

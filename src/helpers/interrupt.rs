@@ -1,4 +1,4 @@
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 use dashmap::DashMap;
 use std::io::{self, Write};
@@ -9,6 +9,7 @@ pub struct ScanState {
     pub current_elements: DashMap<usize, String>,
     pub files_scanned: AtomicUsize,
     pub processes_scanned: AtomicUsize,
+    pub skipped: AtomicUsize,
     pub alerts: AtomicUsize,
     pub warnings: AtomicUsize,
     pub notices: AtomicUsize,
@@ -16,14 +17,24 @@ pub struct ScanState {
     pub start_time: Instant,
     pub should_exit: AtomicBool,
     pub menu_active: AtomicBool,
+    // TUI interactive controls
+    pub cpu_limit: AtomicU8,
+    pub is_paused: AtomicBool,
+    pub skip_generation: AtomicU64,
 }
 
 impl ScanState {
+    #[allow(dead_code)]
     pub fn new() -> Self {
+        Self::with_cpu_limit(100)
+    }
+
+    pub fn with_cpu_limit(cpu_limit: u8) -> Self {
         Self {
             current_elements: DashMap::new(),
             files_scanned: AtomicUsize::new(0),
             processes_scanned: AtomicUsize::new(0),
+            skipped: AtomicUsize::new(0),
             alerts: AtomicUsize::new(0),
             warnings: AtomicUsize::new(0),
             notices: AtomicUsize::new(0),
@@ -31,6 +42,9 @@ impl ScanState {
             start_time: Instant::now(),
             should_exit: AtomicBool::new(false),
             menu_active: AtomicBool::new(false),
+            cpu_limit: AtomicU8::new(cpu_limit.clamp(1, 100)),
+            is_paused: AtomicBool::new(false),
+            skip_generation: AtomicU64::new(0),
         }
     }
 
@@ -70,13 +84,77 @@ impl ScanState {
         self.errors.fetch_add(1, Ordering::Relaxed);
     }
 
+    pub fn increment_skipped(&self) {
+        self.skipped.fetch_add(1, Ordering::Relaxed);
+    }
+
     pub fn should_stop(&self) -> bool {
         self.should_exit.load(Ordering::Relaxed)
     }
 
     pub fn wait_for_resume(&self) {
-        while self.menu_active.load(Ordering::Relaxed) {
+        while self.menu_active.load(Ordering::Relaxed) || self.is_paused.load(Ordering::Relaxed) {
             std::thread::sleep(Duration::from_millis(100));
+        }
+    }
+
+    // --- TUI Interactive Control Methods ---
+
+    /// Get current CPU limit percentage (1-100)
+    pub fn get_cpu_limit(&self) -> u8 {
+        self.cpu_limit.load(Ordering::Relaxed)
+    }
+
+    /// Set CPU limit percentage (clamped to 1-100)
+    #[allow(dead_code)]
+    pub fn set_cpu_limit(&self, limit: u8) {
+        self.cpu_limit.store(limit.clamp(1, 100), Ordering::Relaxed);
+    }
+
+    /// Adjust CPU limit by delta (can be negative), returns new value
+    pub fn adjust_cpu_limit(&self, delta: i8) -> u8 {
+        let current = self.cpu_limit.load(Ordering::Relaxed) as i16;
+        let new_limit = (current + delta as i16).clamp(1, 100) as u8;
+        self.cpu_limit.store(new_limit, Ordering::Relaxed);
+        new_limit
+    }
+
+    /// Check if scan is paused
+    pub fn is_scan_paused(&self) -> bool {
+        self.is_paused.load(Ordering::Relaxed)
+    }
+
+    /// Toggle pause state, returns new state (true = paused)
+    pub fn toggle_pause(&self) -> bool {
+        // Flip the boolean atomically
+        let was_paused = self.is_paused.fetch_xor(true, Ordering::SeqCst);
+        !was_paused
+    }
+
+    /// Request all threads to skip their current element
+    /// Increments skip_generation which signals threads to abandon current work
+    pub fn request_skip(&self) {
+        self.skip_generation.fetch_add(1, Ordering::SeqCst);
+        // Also clear all current elements since they're being skipped
+        self.current_elements.clear();
+    }
+
+    /// Get current skip generation counter
+    #[allow(dead_code)]
+    pub fn get_skip_generation(&self) -> u64 {
+        self.skip_generation.load(Ordering::Relaxed)
+    }
+
+    /// Check if thread should skip (generation changed) and update thread's generation
+    /// Returns true if the thread should skip its current work
+    #[allow(dead_code)]
+    pub fn should_skip(&self, thread_generation: &mut u64) -> bool {
+        let current_gen = self.skip_generation.load(Ordering::Relaxed);
+        if current_gen != *thread_generation {
+            *thread_generation = current_gen;
+            true
+        } else {
+            false
         }
     }
 

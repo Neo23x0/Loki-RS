@@ -77,9 +77,20 @@ pub fn throttle_start() {
     });
 }
 
+#[allow(dead_code)]
 pub fn throttle_end() {
     THROTTLER.with(|t| {
         t.borrow_mut().end_work_and_throttle();
+    });
+}
+
+/// End work and throttle with a dynamically provided CPU limit
+/// This allows the limit to be adjusted during runtime from ScanState
+pub fn throttle_end_with_limit(cpu_limit: u8) {
+    THROTTLER.with(|t| {
+        let mut throttler = t.borrow_mut();
+        throttler.set_target(cpu_limit);
+        throttler.end_work_and_throttle();
     });
 }
 
