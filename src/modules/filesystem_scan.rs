@@ -438,8 +438,8 @@ fn process_file_entry(
     );
     files_scanned += s; files_matched += m; alert_count += a; warning_count += w; notice_count += n;
 
-    // Check for archive
-    if file_format == FileFormat::Zip {
+    // Check for archive (if archive scanning is enabled)
+    if file_format == FileFormat::Zip && scan_config.scan_archives {
         logger.debug(&format!("Scanning ZIP archive content: {}", file_path_str));
         // Calculate container info for linking
         let md5_val = format!("{:x}", md5::compute(&mmap));

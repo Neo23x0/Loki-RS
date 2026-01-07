@@ -12,7 +12,7 @@ use std::time::Duration;
 use std::collections::VecDeque;
 
 use crossterm::{
-    event::{self, Event, KeyCode, KeyModifiers},
+    event::{self, Event, KeyCode, KeyEventKind, KeyModifiers},
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
@@ -131,6 +131,7 @@ struct SettingsDisplay {
     notice_threshold: i16,
     scan_all_types: bool,
     scan_all_drives: bool,
+    exclusion_count: usize,
 }
 
 impl SettingsDisplay {
@@ -153,6 +154,7 @@ impl SettingsDisplay {
             notice_threshold: config.notice_threshold,
             scan_all_types: config.scan_all_types,
             scan_all_drives: config.scan_all_drives,
+            exclusion_count: config.exclusion_count,
         }
     }
     
@@ -484,6 +486,13 @@ fn render_settings_panel(frame: &mut Frame, app: &TuiApp, area: Rect) {
             Span::styled(
                 if app.settings.scan_all_drives { "Yes" } else { "No" },
                 Style::default().fg(if app.settings.scan_all_drives { Color::Green } else { Color::DarkGray }),
+            ),
+        ]),
+        Line::from(vec![
+            Span::styled(" Exclusions: ", Style::default().fg(Color::Cyan)),
+            Span::styled(
+                app.settings.exclusion_count.to_string(),
+                Style::default().fg(Color::White),
             ),
         ]),
     ];
@@ -834,8 +843,11 @@ fn run_main_loop(
         // Poll for events with timeout
         if event::poll(Duration::from_millis(50))? {
             if let Event::Key(key) = event::read()? {
-                if app.handle_key(key.code, key.modifiers) {
-                    break; // User confirmed quit via 'q' or Ctrl+C -> Y
+                // Only handle Press events (Windows sends both Press and Release)
+                if key.kind == KeyEventKind::Press {
+                    if app.handle_key(key.code, key.modifiers) {
+                        break; // User confirmed quit via 'q' or Ctrl+C -> Y
+                    }
                 }
             }
         }

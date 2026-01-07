@@ -1,6 +1,6 @@
 [package]
 name = "loki"
-version = "2.4.2-beta"
+version = "2.4.3-beta"
 edition = "2021"
 
 [[bin]]
@@ -16,7 +16,7 @@ path = "src/loki_util/main.rs"
 [dependencies]
 log = "0.4.*"
 walkdir = "2.5"
-rustop = "1.1.*"
+clap = { version = "4.5", features = ["derive"] }
 arrayvec = "0.7.*"
 flexi_logger = "0.31"
 colored = "2.0"

@@ -5,13 +5,140 @@ use std::fs;
 use std::sync::Arc;
 use std::io::{Read, Write};
 use std::path::PathBuf;
-use rustop::opts;
+use clap::Parser;
 use arrayvec::ArrayVec;
 use csv::ReaderBuilder;
 use rayon::ThreadPoolBuilder;
 use chrono::Local;
 
 use yara_x::{Compiler, Rules};
+
+/// Loki-RS - Simple IOC and YARA Scanner
+#[derive(Parser, Debug)]
+#[command(name = "loki")]
+#[command(about = "Loki-RS YARA and IOC Scanner", long_about = None)]
+#[command(disable_version_flag = true)]
+struct Cli {
+    // =========================================================================
+    // SCAN TARGET
+    // =========================================================================
+    
+    /// Folder to scan (default: entire system)
+    #[arg(short = 'f', long, help_heading = "Scan Target")]
+    folder: Option<String>,
+
+    // =========================================================================
+    // SCAN CONTROL
+    // =========================================================================
+    
+    /// Don't scan processes
+    #[arg(long, help_heading = "Scan Control")]
+    noprocs: bool,
+
+    /// Don't scan the file system
+    #[arg(long, help_heading = "Scan Control")]
+    nofs: bool,
+
+    /// Don't scan inside archive files (ZIP)
+    #[arg(long, help_heading = "Scan Control")]
+    noarchives: bool,
+
+    /// Scan all drives (including mounted drives, usb drives, cloud drives)
+    #[arg(long, help_heading = "Scan Control")]
+    scan_all_drives: bool,
+
+    /// Scan all files regardless of their file type / extension
+    #[arg(long, help_heading = "Scan Control")]
+    scan_all_files: bool,
+
+    // =========================================================================
+    // OUTPUT OPTIONS
+    // =========================================================================
+    
+    /// Specify log output file (defaults to loki_<hostname>_<date>.log)
+    #[arg(short = 'l', long, help_heading = "Output Options")]
+    log: Option<String>,
+
+    /// Disable plaintext log output
+    #[arg(long, help_heading = "Output Options")]
+    nolog: bool,
+
+    /// Specify JSONL output file (defaults to loki_<hostname>_<date>.jsonl)
+    #[arg(short = 'j', long, help_heading = "Output Options")]
+    jsonl: Option<String>,
+
+    /// Disable JSONL output
+    #[arg(long, help_heading = "Output Options")]
+    no_jsonl: bool,
+
+    /// Enable remote logging (host:port)
+    #[arg(short = 'r', long, help_heading = "Output Options")]
+    remote: Option<String>,
+
+    /// Remote protocol (udp/tcp)
+    #[arg(short = 'p', long, default_value = "udp", help_heading = "Output Options")]
+    remote_proto: String,
+
+    /// Remote format (syslog/json)
+    #[arg(long, default_value = "syslog", help_heading = "Output Options")]
+    remote_format: String,
+
+    // =========================================================================
+    // TUNING
+    // =========================================================================
+    
+    /// Alert score threshold
+    #[arg(long, default_value_t = 80, help_heading = "Tuning")]
+    alert_level: i16,
+
+    /// Warning score threshold
+    #[arg(long, default_value_t = 60, help_heading = "Tuning")]
+    warning_level: i16,
+
+    /// Notice score threshold
+    #[arg(long, default_value_t = 40, help_heading = "Tuning")]
+    notice_level: i16,
+
+    /// Maximum number of match reasons to display per finding
+    #[arg(long, default_value_t = 2, help_heading = "Tuning")]
+    max_reasons: usize,
+
+    /// Maximum file size to scan in bytes
+    #[arg(short = 'm', long, default_value_t = 64_000_000, help_heading = "Tuning")]
+    max_file_size: usize,
+
+    /// CPU utilization limit percentage (1-100)
+    #[arg(short = 'c', long, default_value_t = 100, help_heading = "Tuning")]
+    cpu_limit: u8,
+
+    /// Number of threads to use (0=all, -1=all-1, -2=all-2)
+    #[arg(long, default_value_t = -2, help_heading = "Tuning")]
+    threads: i32,
+
+    // =========================================================================
+    // INFO & DEBUG
+    // =========================================================================
+    
+    /// Show version information and exit
+    #[arg(long, help_heading = "Info & Debug")]
+    version: bool,
+
+    /// Show debugging information
+    #[arg(short = 'd', long, help_heading = "Info & Debug")]
+    debug: bool,
+
+    /// Show very verbose trace output
+    #[arg(long, help_heading = "Info & Debug")]
+    trace: bool,
+
+    /// Show all file and process access errors
+    #[arg(long, help_heading = "Info & Debug")]
+    show_access_errors: bool,
+
+    /// Launch interactive TUI (Terminal User Interface) mode
+    #[arg(long, help_heading = "Info & Debug")]
+    tui: bool,
+}
 
 use crate::helpers::helpers::{get_hostname, get_os_type, evaluate_env};
 use crate::helpers::unified_logger::{UnifiedLogger, LoggerConfig, RemoteConfig, RemoteProtocol, RemoteFormat, LogLevel, TuiMessage};
@@ -24,7 +151,7 @@ use crate::modules::filesystem_scan::FileScanModule;
 // Specific TODOs
 // - better error handling
 
-const VERSION: &str = "2.4.2-beta";
+const VERSION: &str = "2.4.3-beta";
 
 const SIGNATURE_SOURCE: &str = "./signatures";
 const MODULES: &'static [&'static str] = &["FileScan", "ProcessCheck"];
@@ -51,12 +178,14 @@ pub struct ScanConfig {
     pub show_access_errors: bool,
     pub scan_all_types: bool,
     pub scan_all_drives: bool,
+    pub scan_archives: bool,
     pub alert_threshold: i16,
     pub warning_threshold: i16,
     pub notice_threshold: i16,
     pub max_reasons: usize,
     pub threads: usize,
     pub cpu_limit: u8,
+    pub exclusion_count: usize,
 }
 
 #[derive(Debug)]
@@ -749,6 +878,22 @@ fn enable_ansi_support() {
     // ANSI codes work natively on Unix-like systems
 }
 
+/// Count the number of active exclusion patterns in the config file
+/// Returns the count of non-empty, non-comment lines
+fn count_exclusions(config_path: &str) -> usize {
+    match fs::read_to_string(config_path) {
+        Ok(content) => {
+            content.lines()
+                .filter(|line| {
+                    let trimmed = line.trim();
+                    !trimmed.is_empty() && !trimmed.starts_with('#')
+                })
+                .count()
+        }
+        Err(_) => 0
+    }
+}
+
 // Welcome message
 fn welcome_message() {
     println!("------------------------------------------------------------------------");
@@ -858,33 +1003,7 @@ fn main() {
     };
 
     // Parsing command line flags
-    let (args, _rest) = opts! {
-        synopsis "Loki-RS YARA and IOC Scanner";
-        opt cpu_limit:u8=100, desc:"CPU utilization limit percentage (1-100, default: 100)";
-        opt max_file_size:usize=64_000_000, desc:"Maximum file size to scan (default: 64MB)";
-        opt show_access_errors:bool, desc:"Show all file and process access errors";
-        opt scan_all_drives:bool, desc:"Scan all drives (including mounted drives, usb drives, cloud drives)";
-        opt scan_all_files:bool, desc:"Scan all files regardless of their file type / extension";
-        opt debug:bool, desc:"Show debugging information";
-        opt trace:bool, desc:"Show very verbose trace output";
-        opt folder:Option<String>, desc:"Folder to scan";
-        opt noprocs:bool, desc:"Don't scan processes";
-        opt nofs:bool, desc:"Don't scan the file system";
-        opt alert_level:i16=80, desc:"Alert score threshold (default: 80)";
-        opt warning_level:i16=60, desc:"Warning score threshold (default: 60)";
-        opt notice_level:i16=40, desc:"Notice score threshold (default: 40)";
-        opt max_reasons:usize=2, desc:"Maximum number of reasons to show (default: 2)";
-        opt jsonl:Option<String>, desc:"Specify JSONL output file (defaults to loki_<hostname>_<date>.jsonl)";
-        opt no_jsonl:bool, desc:"Disable JSONL output";
-        opt log:Option<String>, desc:"Specify log output file (defaults to loki_<hostname>_<date>.log)";
-        opt nolog:bool, desc:"Disable plaintext log output";
-        opt remote:Option<String>, desc:"Enable remote logging (host:port)";
-        opt remote_proto:String="udp".to_string(), desc:"Remote protocol (udp/tcp, default: udp)";
-        opt remote_format:String="syslog".to_string(), desc:"Remote format (syslog/json, default: syslog)";
-        opt version:bool, desc:"Show version information and exit";
-        opt threads:i32=-2, desc:"Number of threads to use (0=all cores, -1=all-1, -2=all-2)";
-        opt tui:bool, desc:"Launch interactive TUI (Terminal User Interface) mode";
-    }.parse_or_exit();
+    let args = Cli::parse();
     
     // Handle version flag
     if args.version {
@@ -1044,18 +1163,23 @@ fn main() {
         std::process::exit(1);
     }
     
+    // Count exclusions from config file
+    let exclusion_count = count_exclusions("./config/excludes.cfg");
+    
     // Create a config
     let scan_config = ScanConfig {
         max_file_size: args.max_file_size,
         show_access_errors: args.show_access_errors,
         scan_all_types: args.scan_all_files,
         scan_all_drives: args.scan_all_drives,
+        scan_archives: !args.noarchives,
         alert_threshold: args.alert_level,
         warning_threshold: args.warning_level,
         notice_threshold: args.notice_level,
         max_reasons: args.max_reasons,
         threads: num_threads,
         cpu_limit: args.cpu_limit,
+        exclusion_count,
     };
     
     // Print scan configuration limits
@@ -1072,6 +1196,9 @@ fn main() {
     }
     if !scan_config.scan_all_drives {
         logger.info("Excluded paths: /proc, /dev, /sys/kernel, /media, /volumes, /Volumes, CloudStorage (use --scan-all-drives to include)");
+    }
+    if scan_config.exclusion_count > 0 {
+        logger.info(&format!("Custom exclusions: {} patterns loaded from ./config/excludes.cfg", scan_config.exclusion_count));
     }
 
     // Initialize IOCs 
@@ -1122,12 +1249,14 @@ fn main() {
             show_access_errors: scan_config.show_access_errors,
             scan_all_types: scan_config.scan_all_types,
             scan_all_drives: scan_config.scan_all_drives,
+            scan_archives: scan_config.scan_archives,
             alert_threshold: scan_config.alert_threshold,
             warning_threshold: scan_config.warning_threshold,
             notice_threshold: scan_config.notice_threshold,
             max_reasons: scan_config.max_reasons,
             threads: scan_config.threads,
             cpu_limit: scan_config.cpu_limit,
+            exclusion_count: scan_config.exclusion_count,
         };
         let target_folder_for_tui = target_folder.clone();
         let scan_state_for_tui = scan_state.clone();
@@ -1613,12 +1742,14 @@ mod tests {
                 show_access_errors: false,
                 scan_all_types: false,
                 scan_all_drives: false,
+                scan_archives: true,
                 alert_threshold: 80,
                 warning_threshold: 60,
                 notice_threshold: 40,
                 max_reasons: 2,
                 threads: 4,
                 cpu_limit: 100,
+                exclusion_count: 0,
             };
 
             assert_eq!(config.max_file_size, 64_000_000);
@@ -1635,12 +1766,14 @@ mod tests {
                 show_access_errors: false,
                 scan_all_types: false,
                 scan_all_drives: false,
+                scan_archives: true,
                 alert_threshold: 80,
                 warning_threshold: 60,
                 notice_threshold: 40,
                 max_reasons: 2,
                 threads: 4,
                 cpu_limit: 100,
+                exclusion_count: 0,
             };
 
             assert!(80 >= 60);

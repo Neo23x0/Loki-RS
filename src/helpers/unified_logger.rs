@@ -1,6 +1,6 @@
 use std::fs::{File, OpenOptions};
 use std::io::{self, Write};
-use std::net::{TcpStream, UdpSocket};
+use std::net::{TcpStream, UdpSocket, ToSocketAddrs};
 use std::sync::Mutex;
 use std::sync::mpsc::Sender;
 use std::time::Duration;
@@ -568,16 +568,21 @@ impl LogOutput for RemoteOutput {
                 }
 
                 if !write_success {
-                    // Reconnect
-                    if let Ok(mut stream) = TcpStream::connect_timeout(
-                        &format!("{}:{}", self.host, self.port).parse().unwrap(), 
-                        Duration::from_millis(500)
-                    ) {
-                        let _ = stream.write_all(bytes);
-                        let _ = stream.write_all(b"\n");
-                        *stream_guard = Some(stream);
+                    // Reconnect - resolve hostname to socket addresses
+                    let addr_str = format!("{}:{}", self.host, self.port);
+                    if let Ok(mut addrs) = addr_str.to_socket_addrs() {
+                        if let Some(addr) = addrs.next() {
+                            if let Ok(mut stream) = TcpStream::connect_timeout(&addr, Duration::from_millis(500)) {
+                                let _ = stream.write_all(bytes);
+                                let _ = stream.write_all(b"\n");
+                                *stream_guard = Some(stream);
+                            } else {
+                                // Failed to connect, drop connection
+                                *stream_guard = None;
+                            }
+                        }
                     } else {
-                        // Failed to reconnect, drop connection
+                        // Failed to resolve, drop connection
                         *stream_guard = None;
                     }
                 }
