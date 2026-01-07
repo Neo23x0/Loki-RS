@@ -24,7 +24,7 @@ use crate::modules::filesystem_scan::FileScanModule;
 // Specific TODOs
 // - better error handling
 
-const VERSION: &str = "2.4.1-beta";
+const VERSION: &str = "2.4.2-beta";
 
 const SIGNATURE_SOURCE: &str = "./signatures";
 const MODULES: &'static [&'static str] = &["FileScan", "ProcessCheck"];
@@ -890,6 +890,12 @@ fn main() {
     if args.version {
         println!("Loki-RS Version {} (Rust)", VERSION);
         std::process::exit(0);
+    }
+    
+    // Show TUI startup message early (before slow initialization)
+    if args.tui {
+        println!("\n\x1b[32mLoki disappears and spawns in the Terminal UI ...\x1b[0m\n");
+        std::io::Write::flush(&mut std::io::stdout()).ok();
     }
     
     // Determine number of threads

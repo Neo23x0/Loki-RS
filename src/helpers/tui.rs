@@ -29,6 +29,8 @@ use crate::helpers::interrupt::ScanState;
 use crate::helpers::unified_logger::{LogEvent, LogLevel, TuiMessage, EventType};
 use crate::ScanConfig;
 
+const VERSION: &str = "2.4.1-beta";
+
 // --- TUI Log Entry (formatted for display) ---
 
 #[derive(Debug, Clone)]
@@ -173,6 +175,7 @@ pub struct TuiApp {
     max_logs: usize,
     scroll_offset: usize,
     auto_scroll: bool,
+    last_visible_height: usize,
     dialog: DialogState,
     settings: SettingsDisplay,
     scan_state: Arc<ScanState>,
@@ -196,6 +199,7 @@ impl TuiApp {
             max_logs: 1000,
             scroll_offset: 0,
             auto_scroll: true,
+            last_visible_height: 20, // Will be updated on first render
             dialog: DialogState::None,
             settings: SettingsDisplay::from_config(config, target_folder),
             scan_state,
@@ -230,8 +234,8 @@ impl TuiApp {
         self.auto_scroll = false;
     }
     
-    fn scroll_down(&mut self, amount: usize, visible_height: usize) {
-        let max_scroll = self.logs.len().saturating_sub(visible_height);
+    fn scroll_down(&mut self, amount: usize) {
+        let max_scroll = self.logs.len().saturating_sub(self.last_visible_height);
         self.scroll_offset = (self.scroll_offset + amount).min(max_scroll);
         
         // Resume auto-scroll if at bottom
@@ -295,13 +299,13 @@ impl TuiApp {
                 self.scroll_up(1);
             }
             KeyCode::Down | KeyCode::Char('j') => {
-                self.scroll_down(1, 20); // Approximate, will be corrected on render
+                self.scroll_down(1);
             }
             KeyCode::PageUp => {
                 self.scroll_up(10);
             }
             KeyCode::PageDown => {
-                self.scroll_down(10, 20);
+                self.scroll_down(10);
             }
             KeyCode::Home | KeyCode::Char('g') => {
                 self.scroll_to_top();
@@ -418,6 +422,10 @@ fn render_settings_panel(frame: &mut Frame, app: &TuiApp, area: Rect) {
         Line::from(Span::styled("        :    @@", logo_style)),
         Line::from(Span::styled("         +   @", logo_style)),
         Line::from(""),
+        // Version and copyright (centered)
+        Line::from(Span::styled(format!(" LOKI RS v{}", VERSION), Style::default().fg(Color::White).add_modifier(Modifier::BOLD))),
+        Line::from(Span::styled(" (c) Florian Roth", Style::default().fg(Color::DarkGray))),
+        Line::from(""),
         // Settings header
         Line::from(Span::styled(" SCAN SETTINGS", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD))),
         Line::from(""),
@@ -516,10 +524,18 @@ fn render_logs_panel(frame: &mut Frame, app: &mut TuiApp, area: Rect) {
     let visible_height = inner.height as usize;
     let total_logs = app.logs.len();
     
+    // Store visible height for scroll calculations
+    app.last_visible_height = visible_height;
+    
     // Calculate proper scroll offset
     let max_scroll = total_logs.saturating_sub(visible_height);
     if app.scroll_offset > max_scroll {
         app.scroll_offset = max_scroll;
+    }
+    
+    // Re-enable auto-scroll if we're at the bottom
+    if app.scroll_offset >= max_scroll && !app.auto_scroll {
+        app.auto_scroll = true;
     }
     
     // Create list items for visible logs
