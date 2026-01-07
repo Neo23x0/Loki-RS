@@ -71,6 +71,12 @@ sudo ./loki --cpu-limit 60 --threads 1
 sudo ./loki --remote syslog-host.internal:514 --remote-proto udp
 ```
 
+## Screenshots
+
+![Loki Startup](./images/loki-screen-1.png)
+
+![Loki Interrup Menu](./images/loki-interrupt-menu.png)
+
 ## Command Line Options
 
 ### Scan Target
