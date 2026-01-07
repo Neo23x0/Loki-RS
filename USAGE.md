@@ -86,20 +86,29 @@ Loki-RS uses YARA rules and IOC files for detection. Signatures are located in t
 
 ### Setting up Signatures
 
-1. **Clone the signature-base repository:**
+The easiest way to set up signatures is using the included `loki-util` tool:
+
+```bash
+./loki-util update
+```
+
+This downloads:
+- **YARA rules** from [YARA Forge](https://yaraforge.com/) (Core rule set)
+- **IOCs** from [signature-base](https://github.com/Neo23x0/signature-base)
+
+Alternatively, you can manually download:
+
+1. **YARA rules** - Download from [YARA Forge releases](https://github.com/YARAHQ/yara-forge/releases):
    ```bash
-   git clone https://github.com/Neo23x0/signature-base ../signature-base/
+   wget https://github.com/YARAHQ/yara-forge/releases/latest/download/yara-forge-rules-core.zip
+   unzip yara-forge-rules-core.zip -d ./signatures/yara/
    ```
 
-2. **Create a symlink:**
+2. **IOCs** - Download from signature-base:
    ```bash
-   ln -s ../signature-base/ ./signatures
-   ```
-
-3. **Or manually copy signatures:**
-   ```bash
-   cp -r ../signature-base/yara ./signatures/
-   cp -r ../signature-base/iocs ./signatures/
+   wget https://github.com/Neo23x0/signature-base/archive/master.tar.gz
+   tar -xzf master.tar.gz
+   cp -r signature-base-master/iocs ./signatures/
    ```
 
 ## Configuration

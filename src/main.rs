@@ -258,7 +258,7 @@ fn initialize_hash_iocs(logger: &UnifiedLogger) -> Vec<HashIOC> {
         Ok(content) => content,
         Err(e) => {
             logger.error(&format!("Unable to read hash IOC file {}: {:?}", hash_ioc_file, e));
-            logger.error(&format!("Please ensure signature-base is available at {}", SIGNATURE_SOURCE));
+            logger.error(&format!("Please ensure IOCs are available at {}/iocs/ (run 'loki-util update' to download)", SIGNATURE_SOURCE));
             return Vec::new(); // Return empty vector instead of panicking
         }
     };
@@ -642,7 +642,7 @@ fn initialize_filename_iocs(logger: &UnifiedLogger) -> Vec<FilenameIOC> {
         Ok(content) => content,
         Err(e) => {
             logger.error(&format!("Unable to read filename IOC file {}: {:?}", filename_ioc_file, e));
-            logger.error(&format!("Please ensure signature-base is available at {}", SIGNATURE_SOURCE));
+            logger.error(&format!("Please ensure IOCs are available at {}/iocs/ (run 'loki-util update' to download)", SIGNATURE_SOURCE));
             return Vec::new(); // Return empty vector instead of panicking
         }
     };
@@ -1219,7 +1219,7 @@ fn main() {
         Ok(rules) => rules,
         Err(e) => {
             logger.error(&format!("Failed to initialize YARA rules: {}", e));
-            logger.error(&format!("Please check signature-base availability at {}", SIGNATURE_SOURCE));
+            logger.error(&format!("Please ensure YARA rules are available at {}/yara/ (run 'loki-util update' to download)", SIGNATURE_SOURCE));
             std::process::exit(1);
         }
     };

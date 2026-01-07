@@ -150,7 +150,7 @@ fetch-signatures: ## Fetch IOCs and YARA signatures from remote repositories
 	@rm -rf ./tmp
 	@echo "[+] Signatures fetched successfully"
 
-install-signatures: ## Install or link signature-base to build directory
+install-signatures: ## Install signatures (YARA from YARA Forge, IOCs from signature-base) to build directory
 	@echo "[+] Setting up signatures ..."
 	@mkdir -p $(SIGNATURES_DIR)
 	@if [ -d "./signatures" ]; then \

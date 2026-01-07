@@ -76,9 +76,9 @@ install-signatures:
     else
         echo "[!] No local signatures found."
         echo "    You can:"
-        echo "    1. Clone: git clone https://github.com/Neo23x0/signature-base ../signature-base/"
-        echo "    2. Link: ln -s ../signature-base/ ./signatures"
-        echo "    3. Or manually copy to build/signatures/"
+        echo "    1. Run: ./loki-util update (to download YARA Forge rules + IOCs)"
+        echo "    2. Run: make fetch-signatures (to download signatures via makefile)"
+        echo "    3. Or manually copy YARA rules and IOCs to build/signatures/"
         mkdir -p build/signatures/yara build/signatures/iocs
         echo "# Place YARA rules (.yar files) here" > build/signatures/yara/README.txt
         echo "# Place IOC files here" > build/signatures/iocs/README.txt

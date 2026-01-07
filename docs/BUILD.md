@@ -308,7 +308,9 @@ loki-release-v2.0.0/
 ├── loki (or loki.exe)
 ├── README.md
 ├── LICENSE
-└── signatures/ (symlink or copy of signature-base)
+└── signatures/
+    ├── yara/     (YARA rules from YARA Forge)
+    └── iocs/     (IOC files from signature-base)
 ```
 
 ### Automated Release Builds
@@ -357,15 +359,16 @@ export PKG_CONFIG_PATH="/usr/local/opt/openssl/lib/pkgconfig"
 chmod +x target/release/loki
 ```
 
-#### 4. "Signature base not found"
+#### 4. "Signatures not found"
 
 **Solution:**
 ```bash
-# Create symlink to signature-base
-ln -s /path/to/signature-base ./signatures
+# Use loki-util to download signatures
+./loki-util update
 
-# Or set custom path via environment variable (if supported)
-export LOKI_SIGNATURE_PATH=/path/to/signature-base
+# Or manually create structure and download
+mkdir -p ./signatures/yara ./signatures/iocs
+# Download YARA rules from YARA Forge and IOCs from signature-base
 ```
 
 #### 5. Build fails with "out of memory"
