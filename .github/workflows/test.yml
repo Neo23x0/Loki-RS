@@ -52,8 +52,15 @@ jobs:
           cp target/release/loki build/
           cp target/release/loki-util build/
           
-          # Copy config
-          cp config/excludes.cfg build/config/
+          # Copy config (use example if regular config doesn't exist)
+          if [ -f "config/excludes.cfg" ]; then
+            cp config/excludes.cfg build/config/
+          elif [ -f "config/excludes.cfg.example" ]; then
+            cp config/excludes.cfg.example build/config/excludes.cfg
+          else
+            # Create empty config
+            echo "# Empty exclusions config for testing" > build/config/excludes.cfg
+          fi
           
           # Copy signatures (use local if available)
           if [ -d "signatures" ]; then
@@ -147,8 +154,15 @@ jobs:
           Copy-Item target/release/loki.exe build/
           Copy-Item target/release/loki-util.exe build/
           
-          # Copy config
-          Copy-Item config/excludes.cfg build/config/
+          # Copy config (use example if regular config doesn't exist)
+          if (Test-Path "config/excludes.cfg") {
+            Copy-Item config/excludes.cfg build/config/
+          } elseif (Test-Path "config/excludes.cfg.example") {
+            Copy-Item config/excludes.cfg.example build/config/excludes.cfg
+          } else {
+            # Create empty config
+            "# Empty exclusions config for testing" | Out-File -FilePath build/config/excludes.cfg
+          }
           
           # Copy signatures (use local if available)
           if (Test-Path "signatures") {

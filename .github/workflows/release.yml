@@ -48,8 +48,15 @@ jobs:
           cp target/release/loki build/
           cp target/release/loki-util build/
           
-          # Copy config
-          cp config/excludes.cfg build/config/
+          # Copy config (use example if regular config doesn't exist)
+          if [ -f "config/excludes.cfg" ]; then
+            cp config/excludes.cfg build/config/
+          elif [ -f "config/excludes.cfg.example" ]; then
+            cp config/excludes.cfg.example build/config/excludes.cfg
+          else
+            # Create empty config
+            echo "# Empty exclusions config for testing" > build/config/excludes.cfg
+          fi
           
           # Copy signatures (use local if available)
           if [ -d "signatures" ]; then
