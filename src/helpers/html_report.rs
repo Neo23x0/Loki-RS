@@ -2088,35 +2088,57 @@ fn syntax_highlight_json(json: &str) -> String {
     result = result.replace(r#"<span class="json-string">"#, r#"<span class="json-key">"#);
     
     // Fix: properly identify keys vs strings
+    // Use char_indices for proper UTF-8 handling
     let mut final_result = String::new();
     let mut in_span = false;
     let mut span_content = String::new();
     let mut i = 0;
-    let result_bytes = result.as_bytes();
+    let span_open = r#"<span class="json-key">"#;
+    let span_close = "</span>";
     
-    while i < result_bytes.len() {
+    while i < result.len() {
+        // Ensure we're at a valid char boundary
+        if !result.is_char_boundary(i) {
+            i += 1;
+            continue;
+        }
         let remaining = &result[i..];
-        if remaining.starts_with(r#"<span class="json-key">"#) {
+        if remaining.starts_with(span_open) {
             in_span = true;
             span_content.clear();
-            i += r#"<span class="json-key">"#.len();
-        } else if in_span && remaining.starts_with("</span>") {
+            i += span_open.len();
+        } else if in_span && remaining.starts_with(span_close) {
             in_span = false;
             // Check what follows
-            let after_span = &result[i + 7..];
-            let trimmed = after_span.trim_start();
-            if trimmed.starts_with(':') {
-                final_result.push_str(&format!(r#"<span class="json-key">{}</span>"#, span_content));
+            let after_span_start = i + span_close.len();
+            if after_span_start <= result.len() && result.is_char_boundary(after_span_start) {
+                let after_span = &result[after_span_start..];
+                let trimmed = after_span.trim_start();
+                if trimmed.starts_with(':') {
+                    final_result.push_str(&format!(r#"<span class="json-key">{}</span>"#, span_content));
+                } else {
+                    final_result.push_str(&format!(r#"<span class="json-string">{}</span>"#, span_content));
+                }
             } else {
                 final_result.push_str(&format!(r#"<span class="json-string">{}</span>"#, span_content));
             }
-            i += 7;
+            i += span_close.len();
         } else if in_span {
-            span_content.push(result_bytes[i] as char);
-            i += 1;
+            // Get the character at this position and advance by its byte length
+            if let Some(c) = remaining.chars().next() {
+                span_content.push(c);
+                i += c.len_utf8();
+            } else {
+                i += 1;
+            }
         } else {
-            final_result.push(result_bytes[i] as char);
-            i += 1;
+            // Get the character at this position and advance by its byte length
+            if let Some(c) = remaining.chars().next() {
+                final_result.push(c);
+                i += c.len_utf8();
+            } else {
+                i += 1;
+            }
         }
     }
     
