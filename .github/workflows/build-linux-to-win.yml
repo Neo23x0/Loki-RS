@@ -30,6 +30,20 @@ jobs:
         sudo apt-get update
         sudo apt-get install -y automake libtool make gcc pkg-config flex bison clang mingw-w64 wget git
 
+    - name: Fix MinGW library case sensitivity
+      run: |
+        # Create symlinks for Windows libraries with case-sensitive names
+        # Linux is case-sensitive but Windows library names are case-insensitive
+        cd /usr/x86_64-w64-mingw32/lib
+        sudo ln -sf libiphlpapi.a libIphlpapi.a
+        sudo ln -sf libws2_32.a libWs2_32.a
+        sudo ln -sf libadvapi32.a libAdvapi32.a
+        sudo ln -sf libkernel32.a libKernel32.a
+        sudo ln -sf libuser32.a libUser32.a
+        sudo ln -sf libuserenv.a libUserenv.a
+        sudo ln -sf libbcrypt.a libBcrypt.a
+        sudo ln -sf libntdll.a libNtdll.a
+
     - name: Install OpenSSL Dev
       run: |
         wget -nv -O openssl.tar.gz https://www.openssl.org/source/openssl-1.1.1p.tar.gz
