@@ -28,7 +28,7 @@ use crate::helpers::interrupt::ScanState;
 use crate::helpers::unified_logger::{LogEvent, LogLevel, TuiMessage, EventType};
 use crate::ScanConfig;
 
-const VERSION: &str = "2.4.1-beta";
+const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 // --- TUI Log Entry (formatted for display) ---
 
@@ -184,6 +184,11 @@ pub struct TuiApp {
     show_threads_overlay: bool,
     // Frozen duration when scan completes
     final_duration: Option<Duration>,
+    // Loading state during initialization
+    is_loading: bool,
+    loading_message: String,
+    // Spinner animation frame
+    spinner_frame: usize,
 }
 
 impl TuiApp {
@@ -192,6 +197,7 @@ impl TuiApp {
         target_folder: &str,
         scan_state: Arc<ScanState>,
         receiver: Receiver<TuiMessage>,
+        start_loading: bool,
     ) -> Self {
         Self {
             logs: VecDeque::with_capacity(1000),
@@ -206,6 +212,9 @@ impl TuiApp {
             receiver,
             show_threads_overlay: false,
             final_duration: None,
+            is_loading: start_loading,
+            loading_message: if start_loading { "Loading IOCs and signatures ...".to_string() } else { String::new() },
+            spinner_frame: 0,
         }
     }
     
@@ -264,7 +273,19 @@ impl TuiApp {
                     // Freeze the timer at completion time
                     self.final_duration = Some(self.scan_state.start_time.elapsed());
                 }
+                TuiMessage::InitProgress(message) => {
+                    self.loading_message = message;
+                }
+                TuiMessage::InitComplete => {
+                    self.is_loading = false;
+                    self.loading_message.clear();
+                }
             }
+        }
+        
+        // Advance spinner animation when loading
+        if self.is_loading {
+            self.spinner_frame = self.spinner_frame.wrapping_add(1);
         }
     }
     
@@ -385,6 +406,11 @@ fn render_ui(frame: &mut Frame, app: &mut TuiApp) {
     // Render overlays (in order of priority)
     if app.show_threads_overlay {
         render_threads_overlay(frame, app, size);
+    }
+    
+    // Render loading overlay during initialization (high priority)
+    if app.is_loading {
+        render_loading_overlay(frame, app, size);
     }
     
     // Render dialog if active (highest priority)
@@ -673,6 +699,47 @@ fn render_quit_dialog(frame: &mut Frame, area: Rect) {
     frame.render_widget(paragraph, dialog_area);
 }
 
+fn render_loading_overlay(frame: &mut Frame, app: &TuiApp, area: Rect) {
+    // Spinner characters for animation
+    const SPINNER: &[char] = &['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+    let spinner_char = SPINNER[app.spinner_frame % SPINNER.len()];
+    
+    // Center the loading overlay
+    let overlay_width = 50u16;
+    let overlay_height = 7u16;
+    let x = (area.width.saturating_sub(overlay_width)) / 2;
+    let y = (area.height.saturating_sub(overlay_height)) / 2;
+    
+    let overlay_area = Rect::new(x, y, overlay_width, overlay_height);
+    
+    // Clear the area behind the overlay
+    frame.render_widget(Clear, overlay_area);
+    
+    let block = Block::default()
+        .title(Span::styled(
+            " INITIALIZING ",
+            Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+        ))
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Cyan))
+        .style(Style::default().bg(Color::Black));
+    
+    let text = vec![
+        Line::from(""),
+        Line::from(vec![
+            Span::styled(format!("  {} ", spinner_char), Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
+            Span::styled(&app.loading_message, Style::default().fg(Color::White)),
+        ]),
+        Line::from(""),
+        Line::from(Span::styled("  Please wait...", Style::default().fg(Color::DarkGray))),
+    ];
+    
+    let paragraph = Paragraph::new(text)
+        .block(block);
+    
+    frame.render_widget(paragraph, overlay_area);
+}
+
 fn render_threads_overlay(frame: &mut Frame, app: &TuiApp, area: Rect) {
     // Collect current elements from all threads
     let mut entries: Vec<_> = app.scan_state.current_elements.iter()
@@ -795,6 +862,7 @@ pub fn run_tui(
     target_folder: &str,
     scan_state: Arc<ScanState>,
     receiver: Receiver<TuiMessage>,
+    start_loading: bool,
 ) -> io::Result<()> {
     // Setup terminal
     enable_raw_mode()?;
@@ -804,7 +872,7 @@ pub fn run_tui(
     let mut terminal = Terminal::new(backend)?;
     
     // Create app state
-    let mut app = TuiApp::new(config, target_folder, scan_state.clone(), receiver);
+    let mut app = TuiApp::new(config, target_folder, scan_state.clone(), receiver, start_loading);
     
     // Main loop
     let result = run_main_loop(&mut terminal, &mut app);

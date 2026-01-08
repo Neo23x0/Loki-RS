@@ -148,6 +148,10 @@ pub struct LogEvent {
 pub enum TuiMessage {
     Log(LogEvent),
     ScanComplete,
+    /// Progress message during initialization (e.g., "Loading YARA rules...")
+    InitProgress(String),
+    /// Initialization complete, ready to start scanning
+    InitComplete,
 }
 
 // --- Output Trait ---

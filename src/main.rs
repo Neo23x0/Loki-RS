@@ -139,9 +139,9 @@ struct Cli {
     #[arg(long, help_heading = "Info & Debug")]
     show_access_errors: bool,
 
-    /// Launch interactive TUI (Terminal User Interface) mode
-    #[arg(long, help_heading = "Info & Debug")]
-    tui: bool,
+    /// Disable TUI and use standard command-line logging
+    #[arg(long, help_heading = "Output Options")]
+    no_tui: bool,
 }
 
 use crate::helpers::helpers::{get_hostname, get_os_type, evaluate_env};
@@ -156,7 +156,7 @@ use crate::modules::filesystem_scan::FileScanModule;
 // Specific TODOs
 // - better error handling
 
-const VERSION: &str = "2.5.1-beta";
+const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 const SIGNATURE_SOURCE: &str = "./signatures";
 const MODULES: &'static [&'static str] = &["FileScan", "ProcessCheck"];
@@ -180,6 +180,7 @@ pub struct YaraMatch {
     pub matched_strings: Vec<String>,  // Format: "identifier: 'value' @ offset"
 }
 
+#[derive(Clone)]
 pub struct ScanConfig {
     pub max_file_size: usize,
     pub show_access_errors: bool,
@@ -1023,9 +1024,12 @@ fn main() {
         std::process::exit(0);
     }
     
+    // TUI mode is enabled by default (unless --no-tui is specified)
+    let tui_mode = !args.no_tui;
+    
     // Show TUI startup message early (before slow initialization)
-    if args.tui {
-        println!("\n\x1b[32mLoki disappears and spawns in the Terminal UI ...\x1b[0m\n");
+    if tui_mode {
+        println!("\nStarting up the TUI ...\n");
         std::io::Write::flush(&mut std::io::stdout()).ok();
     }
     
@@ -1107,15 +1111,18 @@ fn main() {
     };
 
     // Set up TUI channel if TUI mode is enabled
-    let (tui_sender, tui_receiver) = if args.tui {
+    let (tui_sender, tui_receiver) = if tui_mode {
         let (tx, rx) = std::sync::mpsc::channel::<TuiMessage>();
         (Some(tx), Some(rx))
     } else {
         (None, None)
     };
 
+    // Create scan_state early so TUI can use it during initialization
+    let scan_state = Arc::new(ScanState::with_cpu_limit(args.cpu_limit));
+
     let logger_config = LoggerConfig {
-        console: !args.tui,  // Disable console output in TUI mode
+        console: !tui_mode,  // Disable console output in TUI mode
         log_level,
         log_file: log_file.clone(),
         jsonl_file: jsonl_file.clone(),
@@ -1159,15 +1166,6 @@ fn main() {
     }
     logger.info(&format!("Active modules MODULES: {:?}", active_modules));
 
-    // Set some default values
-    // default target folder
-    let mut target_folder: String = '/'.to_string(); 
-    if get_os_type() == "windows" { target_folder = "C:\\".to_string(); }
-    // if target folder has ben set via command line flag
-    if let Some(args_target_folder) = args.folder {
-        target_folder = args_target_folder;
-    }
-
     // Validate thresholds
     if args.alert_level < args.warning_level || args.warning_level < args.notice_level {
         eprintln!("Error: Thresholds must be in order: alert >= warning >= notice");
@@ -1177,6 +1175,13 @@ fn main() {
     
     // Count exclusions from config file
     let exclusion_count = count_exclusions("./config/excludes.cfg");
+    
+    // Set some default values for target folder (needed for TUI)
+    let mut target_folder: String = '/'.to_string(); 
+    if get_os_type() == "windows" { target_folder = "C:\\".to_string(); }
+    if let Some(ref args_target_folder) = args.folder {
+        target_folder = args_target_folder.clone();
+    }
     
     // Create a config (yara_rules_count and ioc_count will be set after loading)
     let mut scan_config = ScanConfig {
@@ -1215,19 +1220,72 @@ fn main() {
         logger.info(&format!("Custom exclusions: {} patterns loaded from ./config/excludes.cfg", scan_config.exclusion_count));
     }
 
-    // Initialize IOCs 
+    // Set up Ctrl+C handler early (before TUI starts)
+    let scan_state_clone = scan_state.clone();
+    if tui_mode {
+        // In TUI mode: just set the exit flag (TUI handles its own quit dialog)
+        ctrlc::set_handler(move || {
+            scan_state_clone.should_exit.store(true, std::sync::atomic::Ordering::SeqCst);
+        }).expect("Error setting Ctrl-C handler");
+    } else {
+        // In normal mode: show the interactive menu
+        ctrlc::set_handler(move || {
+            scan_state_clone.display_menu();
+        }).expect("Error setting Ctrl-C handler");
+    }
+
+    // Spawn TUI thread early if in TUI mode (shows loading state during initialization)
+    let tui_handle = if tui_mode {
+        let scan_config_for_tui = scan_config.clone();
+        let target_folder_for_tui = target_folder.clone();
+        let scan_state_for_tui = scan_state.clone();
+        let receiver = tui_receiver.expect("TUI receiver should be set in TUI mode");
+        
+        Some(std::thread::spawn(move || {
+            if let Err(e) = run_tui(&scan_config_for_tui, &target_folder_for_tui, scan_state_for_tui, receiver, true) {
+                eprintln!("TUI error: {}", e);
+            }
+        }))
+    } else {
+        None
+    };
+
+    // Give TUI a moment to initialize before sending messages
+    if tui_mode {
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+
+    // Initialize IOCs (send progress to TUI if enabled)
+    if let Some(ref sender) = tui_sender {
+        let _ = sender.send(TuiMessage::InitProgress("Loading hash IOCs ...".to_string()));
+    }
     logger.info("Initialize hash IOCs ...");
     let hash_iocs = initialize_hash_iocs(&logger);
     let hash_collections = organize_hash_iocs(hash_iocs, "hash IOCs", &logger);
+    
+    if let Some(ref sender) = tui_sender {
+        let _ = sender.send(TuiMessage::InitProgress("Loading false positive hashes ...".to_string()));
+    }
     logger.info("Initialize false positive hash IOCs ...");
     let fp_hash_iocs = initialize_false_positive_hash_iocs(&logger);
     let fp_hash_collections = organize_hash_iocs(fp_hash_iocs, "false positive hash IOCs", &logger);
+    
+    if let Some(ref sender) = tui_sender {
+        let _ = sender.send(TuiMessage::InitProgress("Loading filename IOCs ...".to_string()));
+    }
     logger.info("Initialize filename IOCs ...");
     let filename_iocs = initialize_filename_iocs(&logger);
+    
+    if let Some(ref sender) = tui_sender {
+        let _ = sender.send(TuiMessage::InitProgress("Loading C2 IOCs ...".to_string()));
+    }
     logger.info("Initialize C2 IOCs ...");
     let c2_iocs = initialize_c2_iocs(&logger);
 
     // Initialize the YARA rules
+    if let Some(ref sender) = tui_sender {
+        let _ = sender.send(TuiMessage::InitProgress("Compiling YARA rules ...".to_string()));
+    }
     logger.info("Initializing YARA rules ...");
     let (compiled_rules, yara_rules_count) = match initialize_yara_rules(&logger) {
         Ok((rules, count)) => (rules, count),
@@ -1248,55 +1306,14 @@ fn main() {
     // Update scan_config with the counts
     scan_config.yara_rules_count = yara_rules_count;
     scan_config.ioc_count = total_ioc_count;
-
-    // Initialize interrupt handler with CPU limit from config
-    let scan_state = Arc::new(ScanState::with_cpu_limit(scan_config.cpu_limit));
-    let tui_mode = args.tui;
     
-    // Set up Ctrl+C handler
-    let scan_state_clone = scan_state.clone();
-    if tui_mode {
-        // In TUI mode: just set the exit flag (TUI handles its own quit dialog)
-        ctrlc::set_handler(move || {
-            scan_state_clone.should_exit.store(true, std::sync::atomic::Ordering::SeqCst);
-        }).expect("Error setting Ctrl-C handler");
-    } else {
-        // In normal mode: show the interactive menu
-        ctrlc::set_handler(move || {
-            scan_state_clone.display_menu();
-        }).expect("Error setting Ctrl-C handler");
+    // Update scan_state with actual CPU limit from config
+    scan_state.set_cpu_limit(scan_config.cpu_limit);
+    
+    // Signal TUI that initialization is complete
+    if let Some(ref sender) = tui_sender {
+        let _ = sender.send(TuiMessage::InitComplete);
     }
-
-    // Spawn TUI thread if in TUI mode
-    let tui_handle = if tui_mode {
-        let scan_config_for_tui = ScanConfig {
-            max_file_size: scan_config.max_file_size,
-            show_access_errors: scan_config.show_access_errors,
-            scan_all_types: scan_config.scan_all_types,
-            scan_all_drives: scan_config.scan_all_drives,
-            scan_archives: scan_config.scan_archives,
-            alert_threshold: scan_config.alert_threshold,
-            warning_threshold: scan_config.warning_threshold,
-            notice_threshold: scan_config.notice_threshold,
-            max_reasons: scan_config.max_reasons,
-            threads: scan_config.threads,
-            cpu_limit: scan_config.cpu_limit,
-            exclusion_count: scan_config.exclusion_count,
-            yara_rules_count: scan_config.yara_rules_count,
-            ioc_count: scan_config.ioc_count,
-        };
-        let target_folder_for_tui = target_folder.clone();
-        let scan_state_for_tui = scan_state.clone();
-        let receiver = tui_receiver.expect("TUI receiver should be set in TUI mode");
-        
-        Some(std::thread::spawn(move || {
-            if let Err(e) = run_tui(&scan_config_for_tui, &target_folder_for_tui, scan_state_for_tui, receiver) {
-                eprintln!("TUI error: {}", e);
-            }
-        }))
-    } else {
-        None
-    };
 
     // Register available modules
     let modules: Vec<Box<dyn ScanModule>> = vec![

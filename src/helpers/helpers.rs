@@ -1,7 +1,7 @@
 use std::env;
 use std::net::IpAddr;
 use human_bytes::human_bytes;
-use sysinfo::{System, Disks, Networks};
+use sysinfo::{System, Disks};
 use crate::helpers::unified_logger::UnifiedLogger;
 
 // Evaluate platform & environment information
@@ -28,32 +28,30 @@ pub fn evaluate_env(logger: &UnifiedLogger) {
         human_bytes((sys.total_memory() - sys.used_memory()) as f64)));
     
     // Network interfaces and IP addresses
-    let networks = Networks::new_with_refreshed_list();
+    // Note: We use get_if_addrs directly as sysinfo::Networks uses different interface
+    // naming conventions on Windows, causing cross-library name matching to fail
     let mut ip_addresses: Vec<String> = Vec::new();
     
-    for (interface_name, _network) in networks.iter() {
-        // Skip loopback and virtual interfaces for cleaner output
-        let name_lower = interface_name.to_lowercase();
-        if name_lower.contains("lo") || name_lower.contains("loopback") {
-            continue;
-        }
-        
-        // Get IP addresses for this interface using the network_interfaces approach
-        if let Ok(interfaces) = get_if_addrs::get_if_addrs() {
-            for iface in interfaces {
-                if iface.name == *interface_name {
-                    let ip = iface.addr.ip();
-                    // Skip loopback IPs
-                    if !ip.is_loopback() {
-                        let ip_str = match ip {
-                            IpAddr::V4(v4) => format!("{}: {} (IPv4)", interface_name, v4),
-                            IpAddr::V6(v6) => format!("{}: {} (IPv6)", interface_name, v6),
-                        };
-                        if !ip_addresses.contains(&ip_str) {
-                            ip_addresses.push(ip_str);
-                        }
-                    }
-                }
+    if let Ok(interfaces) = get_if_addrs::get_if_addrs() {
+        for iface in interfaces {
+            let ip = iface.addr.ip();
+            // Skip loopback IPs
+            if ip.is_loopback() {
+                continue;
+            }
+            
+            // Skip common virtual interface prefixes
+            let name_lower = iface.name.to_lowercase();
+            if name_lower.contains("loopback") || name_lower == "lo" {
+                continue;
+            }
+            
+            let ip_str = match ip {
+                IpAddr::V4(v4) => format!("{}: {} (IPv4)", iface.name, v4),
+                IpAddr::V6(v6) => format!("{}: {} (IPv6)", iface.name, v6),
+            };
+            if !ip_addresses.contains(&ip_str) {
+                ip_addresses.push(ip_str);
             }
         }
     }
