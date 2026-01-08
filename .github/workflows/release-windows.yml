@@ -18,13 +18,15 @@ jobs:
       SYSTEM: MINGW64
       TARGET_PREFIX: /usr/x86_64-w64-mingw32
       PKG_CONFIG_PATH: /usr/x86_64-w64-mingw32/lib/pkgconfig
+      RUSTFLAGS: -L /usr/x86_64-w64-mingw32/lib
 
     steps:
     - uses: actions/checkout@v6
 
     - name: Install Dependencies
       run: | 
-        sudo apt-get install automake libtool make gcc pkg-config flex bison clang mingw-w64 wget git
+        sudo apt-get update
+        sudo apt-get install -y automake libtool make gcc pkg-config flex bison clang mingw-w64 wget git
 
     - name: Install OpenSSL Dev
       run: |
