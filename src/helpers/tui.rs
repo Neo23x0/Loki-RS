@@ -24,7 +24,6 @@ use ratatui::{
     widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Wrap},
     Frame, Terminal,
 };
-
 use crate::helpers::interrupt::ScanState;
 use crate::helpers::unified_logger::{LogEvent, LogLevel, TuiMessage, EventType};
 use crate::ScanConfig;
@@ -126,20 +125,19 @@ struct SettingsDisplay {
     threads: usize,
     cpu_limit: u8,
     max_file_size: String,
-    alert_threshold: i16,
-    warning_threshold: i16,
-    notice_threshold: i16,
     scan_all_types: bool,
     scan_all_drives: bool,
     exclusion_count: usize,
+    yara_rules_count: usize,
+    ioc_count: usize,
 }
 
 impl SettingsDisplay {
     fn from_config(config: &ScanConfig, target_folder: &str) -> Self {
         let max_file_size = if config.max_file_size >= 1_000_000 {
-            format!("{:.1} MB", config.max_file_size as f64 / 1_000_000.0)
+            format!("{:.0} MB", config.max_file_size as f64 / 1_000_000.0)
         } else if config.max_file_size >= 1_000 {
-            format!("{:.1} KB", config.max_file_size as f64 / 1_000.0)
+            format!("{:.0} KB", config.max_file_size as f64 / 1_000.0)
         } else {
             format!("{} B", config.max_file_size)
         };
@@ -149,12 +147,11 @@ impl SettingsDisplay {
             threads: config.threads,
             cpu_limit: config.cpu_limit,
             max_file_size,
-            alert_threshold: config.alert_threshold,
-            warning_threshold: config.warning_threshold,
-            notice_threshold: config.notice_threshold,
             scan_all_types: config.scan_all_types,
             scan_all_drives: config.scan_all_drives,
             exclusion_count: config.exclusion_count,
+            yara_rules_count: config.yara_rules_count,
+            ioc_count: config.ioc_count,
         }
     }
     
@@ -413,16 +410,17 @@ fn render_settings_panel(frame: &mut Frame, app: &TuiApp, area: Rect) {
     
     let settings_text = vec![
         // ASCII Logo
-        Line::from(Span::styled("    @            %@", logo_style)),
-        Line::from(Span::styled("    @            @@", logo_style)),
-        Line::from(Span::styled("    %@           @@", logo_style)),
-        Line::from(Span::styled("    .@          @@", logo_style)),
-        Line::from(Span::styled("     *@  @@@@@ +@", logo_style)),
-        Line::from(Span::styled("      .@@*@@@%:-", logo_style)),
-        Line::from(Span::styled("          =@@ @", logo_style)),
-        Line::from(Span::styled("           @  @", logo_style)),
-        Line::from(Span::styled("        :    @@", logo_style)),
-        Line::from(Span::styled("         +   @", logo_style)),
+        Line::from(Span::styled("   ::             x.", logo_style)),
+        Line::from(Span::styled("   ;.             xX", logo_style)),
+        Line::from(Span::styled("   .x            :$x", logo_style)),
+        Line::from(Span::styled("    ++           Xx", logo_style)),
+        Line::from(Span::styled("    .X:  ..;.   ;+.", logo_style)),
+        Line::from(Span::styled("     :xx +XXX;+::.", logo_style)),
+        Line::from(Span::styled("       :xx+$;.:.", logo_style)),
+        Line::from(Span::styled("          .X+:;;", logo_style)),
+        Line::from(Span::styled("           ;  :.", logo_style)),
+        Line::from(Span::styled("        .    x+", logo_style)),
+        Line::from(Span::styled("         :   +", logo_style)),
         Line::from(""),
         // Version and copyright (centered)
         Line::from(Span::styled(format!(" LOKI RS v{}", VERSION), Style::default().fg(Color::White).add_modifier(Modifier::BOLD))),
@@ -439,6 +437,19 @@ fn render_settings_panel(frame: &mut Frame, app: &TuiApp, area: Rect) {
         ]),
         Line::from(""),
         Line::from(vec![
+            Span::styled(" YARA Rules: ", Style::default().fg(Color::Cyan)),
+            Span::styled(app.settings.yara_rules_count.to_string(), Style::default().fg(Color::White)),
+        ]),
+        Line::from(vec![
+            Span::styled(" IOCs: ", Style::default().fg(Color::Cyan)),
+            Span::styled(app.settings.ioc_count.to_string(), Style::default().fg(Color::White)),
+        ]),
+        Line::from(vec![
+            Span::styled(" Exclusions: ", Style::default().fg(Color::Cyan)),
+            Span::styled(app.settings.exclusion_count.to_string(), Style::default().fg(Color::White)),
+        ]),
+        Line::from(""),
+        Line::from(vec![
             Span::styled(" Threads: ", Style::default().fg(Color::Cyan)),
             Span::styled(app.settings.threads.to_string(), Style::default().fg(Color::White)),
         ]),
@@ -447,31 +458,8 @@ fn render_settings_panel(frame: &mut Frame, app: &TuiApp, area: Rect) {
             Span::styled(format!("{}%", app.settings.cpu_limit), Style::default().fg(Color::White)),
         ]),
         Line::from(vec![
-            Span::styled(" Max Size: ", Style::default().fg(Color::Cyan)),
+            Span::styled(" File Size: ", Style::default().fg(Color::Cyan)),
             Span::styled(&app.settings.max_file_size, Style::default().fg(Color::White)),
-        ]),
-        Line::from(vec![
-            Span::styled(" Skipped: ", Style::default().fg(Color::Cyan)),
-            Span::styled(
-                format!("{}", app.scan_state.skipped.load(std::sync::atomic::Ordering::Relaxed)),
-                Style::default().fg(Color::DarkGray)
-            ),
-        ]),
-        Line::from(""),
-        Line::from(vec![
-            Span::styled(" Thresholds:", Style::default().fg(Color::Cyan)),
-        ]),
-        Line::from(vec![
-            Span::styled("  Alert: ", Style::default().fg(Color::Red)),
-            Span::styled(format!(">= {}", app.settings.alert_threshold), Style::default().fg(Color::White)),
-        ]),
-        Line::from(vec![
-            Span::styled("  Warn:  ", Style::default().fg(Color::Yellow)),
-            Span::styled(format!(">= {}", app.settings.warning_threshold), Style::default().fg(Color::White)),
-        ]),
-        Line::from(vec![
-            Span::styled("  Notice:", Style::default().fg(Color::Cyan)),
-            Span::styled(format!(">= {}", app.settings.notice_threshold), Style::default().fg(Color::White)),
         ]),
         Line::from(""),
         Line::from(vec![
@@ -489,10 +477,10 @@ fn render_settings_panel(frame: &mut Frame, app: &TuiApp, area: Rect) {
             ),
         ]),
         Line::from(vec![
-            Span::styled(" Exclusions: ", Style::default().fg(Color::Cyan)),
+            Span::styled(" Skipped: ", Style::default().fg(Color::Cyan)),
             Span::styled(
-                app.settings.exclusion_count.to_string(),
-                Style::default().fg(Color::White),
+                format!("{}", app.scan_state.skipped.load(std::sync::atomic::Ordering::Relaxed)),
+                Style::default().fg(Color::DarkGray)
             ),
         ]),
     ];

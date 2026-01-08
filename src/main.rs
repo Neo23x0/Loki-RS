@@ -33,15 +33,15 @@ struct Cli {
     
     /// Don't scan processes
     #[arg(long, help_heading = "Scan Control")]
-    noprocs: bool,
+    no_procs: bool,
 
     /// Don't scan the file system
     #[arg(long, help_heading = "Scan Control")]
-    nofs: bool,
+    no_fs: bool,
 
     /// Don't scan inside archive files (ZIP)
     #[arg(long, help_heading = "Scan Control")]
-    noarchives: bool,
+    no_archive: bool,
 
     /// Scan all drives (including mounted drives, usb drives, cloud drives)
     #[arg(long, help_heading = "Scan Control")]
@@ -61,7 +61,7 @@ struct Cli {
 
     /// Disable plaintext log output
     #[arg(long, help_heading = "Output Options")]
-    nolog: bool,
+    no_log: bool,
 
     /// Specify JSONL output file (defaults to loki_<hostname>_<date>.jsonl)
     #[arg(short = 'j', long, help_heading = "Output Options")]
@@ -70,6 +70,10 @@ struct Cli {
     /// Disable JSONL output
     #[arg(long, help_heading = "Output Options")]
     no_jsonl: bool,
+
+    /// Disable HTML report generation
+    #[arg(long, help_heading = "Output Options")]
+    no_html: bool,
 
     /// Enable remote logging (host:port)
     #[arg(short = 'r', long, help_heading = "Output Options")]
@@ -141,6 +145,7 @@ struct Cli {
 }
 
 use crate::helpers::helpers::{get_hostname, get_os_type, evaluate_env};
+use crate::helpers::html_report;
 use crate::helpers::unified_logger::{UnifiedLogger, LoggerConfig, RemoteConfig, RemoteProtocol, RemoteFormat, LogLevel, TuiMessage};
 use crate::helpers::interrupt::ScanState;
 use crate::helpers::tui::run_tui;
@@ -151,7 +156,7 @@ use crate::modules::filesystem_scan::FileScanModule;
 // Specific TODOs
 // - better error handling
 
-const VERSION: &str = "2.4.4-beta";
+const VERSION: &str = "2.4.5-beta";
 
 const SIGNATURE_SOURCE: &str = "./signatures";
 const MODULES: &'static [&'static str] = &["FileScan", "ProcessCheck"];
@@ -162,6 +167,7 @@ pub struct GenMatch {
     pub score: i16,
     pub description: Option<String>,
     pub author: Option<String>,
+    pub reference: Option<String>,
     pub matched_strings: Option<Vec<String>>,
 }
 
@@ -170,6 +176,7 @@ pub struct YaraMatch {
     pub score: i16,
     pub description: String,
     pub author: String,
+    pub reference: String,
     pub matched_strings: Vec<String>,  // Format: "identifier: 'value' @ offset"
 }
 
@@ -186,6 +193,8 @@ pub struct ScanConfig {
     pub threads: usize,
     pub cpu_limit: u8,
     pub exclusion_count: usize,
+    pub yara_rules_count: usize,
+    pub ioc_count: usize,
 }
 
 #[derive(Debug)]
@@ -761,7 +770,8 @@ fn get_filename_ioc_type(_filename_ioc_value: &str) -> FilenameIOCType {
 } 
 
 // Initialize the rule files
-fn initialize_yara_rules(logger: &UnifiedLogger) -> Result<Rules, String> {
+// Returns (compiled_rules, rule_count)
+fn initialize_yara_rules(logger: &UnifiedLogger) -> Result<(Rules, usize), String> {
     // Composed YARA rule set 
     // we're concatenating all rules from all rule files to a single string and 
     // compile them all together into a single big rule set for performance purposes
@@ -819,7 +829,7 @@ fn initialize_yara_rules(logger: &UnifiedLogger) -> Result<Rules, String> {
         .count();
     
     logger.info(&format!("Successfully compiled {} rules from {} rule files into a big set", rule_count, count));
-    Ok(compiled_all_rules)
+    Ok((compiled_all_rules, rule_count))
 }
 
 // Compile a rule set string and check for errors
@@ -897,15 +907,17 @@ fn count_exclusions(config_path: &str) -> usize {
 // Welcome message
 fn welcome_message() {
     println!("------------------------------------------------------------------------");
-    println!("     __   ____  __ ______  ____                                        ");
-    println!("    / /  / __ \\/ //_/  _/ / __/______ ____  ___  ___ ____              ");
-    println!("   / /__/ /_/ / ,< _/ /  _\\ \\/ __/ _ `/ _ \\/ _ \\/ -_) __/           ");
-    println!("  /____/\\____/_/|_/___/ /___/\\__/\\_,_/_//_/_//_/\\__/_/              ");
-    println!("  High-Performance, Multi-threaded YARA & IOC Scanner                    ");
-    println!(" ");
-    println!("  Version {} (Rust)                                            ", VERSION);
-    println!("  Florian Roth 2026                                                     ");
-    println!(" ");
+    println!("   ::             x.    __    ____  __ __ ____                          ");
+    println!("   ;.             xX   / /   / __ \\/ //_//  _/                          ");
+    println!("   .x            :$x  / /   / / / / ,<   / /                            ");
+    println!("    ++           Xx  / /___/ /_/ / /| |_/ /                             ");
+    println!("    .X:  ..;.   ;+. /_____/\\____/_/ |_/___/                             ");
+    println!("     :xx +XXX;+::.                                                      ");
+    println!("       :xx+$;.:.   High-Performance, Multi-threaded YARA & IOC Scanner  ");
+    println!("          .X+:;;                                                        ");
+    println!("           ;  :.   Version {} (Rust)                                    ", VERSION);
+    println!("        .    x+    Florian Roth 2026                                    ");
+    println!("         :   +                                                          ");
     println!("------------------------------------------------------------------------");                      
 }
 
@@ -1046,7 +1058,7 @@ fn main() {
     };
 
     // Determine log file path
-    let log_file = if args.nolog {
+    let log_file = if args.no_log {
         None
     } else {
         Some(args.log.unwrap_or_else(|| {
@@ -1141,8 +1153,8 @@ fn main() {
     // Evaluate active modules
     let mut active_modules: ArrayVec<String, 20> = ArrayVec::<String, 20>::new();
     for module in MODULES {
-        if args.noprocs && module.to_string() == "ProcessCheck" { continue; }
-        if args.nofs && module.to_string() == "FileScan" { continue; }
+        if args.no_procs && module.to_string() == "ProcessCheck" { continue; }
+        if args.no_fs && module.to_string() == "FileScan" { continue; }
         active_modules.insert(active_modules.len(), module.to_string());
     }
     logger.info(&format!("Active modules MODULES: {:?}", active_modules));
@@ -1166,13 +1178,13 @@ fn main() {
     // Count exclusions from config file
     let exclusion_count = count_exclusions("./config/excludes.cfg");
     
-    // Create a config
-    let scan_config = ScanConfig {
+    // Create a config (yara_rules_count and ioc_count will be set after loading)
+    let mut scan_config = ScanConfig {
         max_file_size: args.max_file_size,
         show_access_errors: args.show_access_errors,
         scan_all_types: args.scan_all_files,
         scan_all_drives: args.scan_all_drives,
-        scan_archives: !args.noarchives,
+        scan_archives: !args.no_archive,
         alert_threshold: args.alert_level,
         warning_threshold: args.warning_level,
         notice_threshold: args.notice_level,
@@ -1180,6 +1192,8 @@ fn main() {
         threads: num_threads,
         cpu_limit: args.cpu_limit,
         exclusion_count,
+        yara_rules_count: 0,
+        ioc_count: 0,
     };
     
     // Print scan configuration limits
@@ -1215,14 +1229,25 @@ fn main() {
 
     // Initialize the YARA rules
     logger.info("Initializing YARA rules ...");
-    let compiled_rules = match initialize_yara_rules(&logger) {
-        Ok(rules) => rules,
+    let (compiled_rules, yara_rules_count) = match initialize_yara_rules(&logger) {
+        Ok((rules, count)) => (rules, count),
         Err(e) => {
             logger.error(&format!("Failed to initialize YARA rules: {}", e));
             logger.error(&format!("Please ensure YARA rules are available at {}/yara/ (run 'loki-util update' to download)", SIGNATURE_SOURCE));
             std::process::exit(1);
         }
     };
+    
+    // Calculate total IOC count (hash IOCs + filename IOCs + C2 IOCs)
+    let total_ioc_count = hash_collections.md5_iocs.len() 
+        + hash_collections.sha1_iocs.len() 
+        + hash_collections.sha256_iocs.len()
+        + filename_iocs.len() 
+        + c2_iocs.len();
+    
+    // Update scan_config with the counts
+    scan_config.yara_rules_count = yara_rules_count;
+    scan_config.ioc_count = total_ioc_count;
 
     // Initialize interrupt handler with CPU limit from config
     let scan_state = Arc::new(ScanState::with_cpu_limit(scan_config.cpu_limit));
@@ -1257,6 +1282,8 @@ fn main() {
             threads: scan_config.threads,
             cpu_limit: scan_config.cpu_limit,
             exclusion_count: scan_config.exclusion_count,
+            yara_rules_count: scan_config.yara_rules_count,
+            ioc_count: scan_config.ioc_count,
         };
         let target_folder_for_tui = target_folder.clone();
         let scan_state_for_tui = scan_state.clone();
@@ -1348,6 +1375,14 @@ fn main() {
     }
     if let Some(path) = &jsonl_file {
         logger.info(&format!("JSONL log file written to: {}", path));
+        
+        // Generate HTML report from JSONL findings (unless disabled)
+        if !args.no_html {
+            match html_report::generate_report(path, &scan_config, VERSION) {
+                Ok(html_path) => logger.info(&format!("HTML report written to: {}", html_path)),
+                Err(e) => logger.warning(&format!("Failed to generate HTML report: {}", e)),
+            }
+        }
     }
     
     // Handle TUI mode completion
@@ -1750,6 +1785,8 @@ mod tests {
                 threads: 4,
                 cpu_limit: 100,
                 exclusion_count: 0,
+                yara_rules_count: 0,
+                ioc_count: 0,
             };
 
             assert_eq!(config.max_file_size, 64_000_000);
@@ -1774,6 +1811,8 @@ mod tests {
                 threads: 4,
                 cpu_limit: 100,
                 exclusion_count: 0,
+                yara_rules_count: 0,
+                ioc_count: 0,
             };
 
             assert!(80 >= 60);

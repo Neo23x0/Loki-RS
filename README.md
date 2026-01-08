@@ -14,6 +14,7 @@ A rewrite of [Loki](https://github.com/Neo23x0/Loki) in Rust. High-performance, 
 - Archive scanning (ZIP files)
 - Interactive TUI with real-time stats and controls
 - Remote logging via syslog (UDP/TCP) (SYSLOG/JSON)
+- HTML report generation with detailed findings
 - Configurable scoring thresholds
 - Smart filtering (skips /proc, /sys, mounted drives by default)
 - Magic header detection for executables
@@ -62,7 +63,7 @@ sudo ./loki --tui
 
 ```bash
 # Scan a mounted image (skip process scanning, use all cores)
-sudo ./loki --noprocs --folder ~/image1 --threads 0
+sudo ./loki --no-procs --folder ~/image1 --threads 0
 
 # Slow and cautious scan (lower CPU limit, single thread)
 sudo ./loki --cpu-limit 60 --threads 1
@@ -87,9 +88,9 @@ sudo ./loki --remote syslog-host.internal:514 --remote-proto udp
 ### Scan Control
 | Option | Default | Description |
 |--------|---------|-------------|
-| `--noprocs` | `false` | Skip process memory scanning |
-| `--nofs` | `false` | Skip filesystem scanning |
-| `--noarchives` | `false` | Skip scanning inside archives (ZIP) |
+| `--no-procs` | `false` | Skip process memory scanning |
+| `--no-fs` | `false` | Skip filesystem scanning |
+| `--no-archive` | `false` | Skip scanning inside archives (ZIP) |
 | `--scan-all-drives` | `false` | Scan all drives including mounted/network/cloud |
 | `--scan-all-files` | `false` | Scan all files regardless of extension/type |
 
@@ -97,9 +98,10 @@ sudo ./loki --remote syslog-host.internal:514 --remote-proto udp
 | Option | Default | Description |
 |--------|---------|-------------|
 | `-l, --log <FILE>` | auto | Plain text log file |
-| `--nolog` | `false` | Disable plaintext log output |
+| `--no-log` | `false` | Disable plaintext log output |
 | `-j, --jsonl <FILE>` | auto | JSONL output file |
 | `--no-jsonl` | `false` | Disable JSONL output |
+| `--no-html` | `false` | Disable HTML report generation |
 | `-r, --remote <HOST:PORT>` | none | Remote syslog destination |
 | `-p, --remote-proto <PROTO>` | `udp` | Remote protocol (udp/tcp) |
 | `--remote-format <FMT>` | `syslog` | Remote format (syslog/json) |
@@ -142,6 +144,21 @@ sudo ./loki --tui --folder /path/to/scan
 | Arrow keys | Scroll logs |
 
 ![Loki TUI Screenshot](./images/loki-tui-1.png)
+
+## HTML Reports
+
+Loki-RS automatically generates a styled HTML report after each scan. The report is created alongside the JSONL log file and provides a visual summary of all findings.
+
+The report includes:
+- Scan configuration and runtime statistics
+- Color-coded findings grouped by severity (Alert, Warning, Notice)
+- File metadata (hashes, timestamps, size)
+- YARA rule matches with descriptions and matched strings
+- IOC match details with references
+
+![Loki HTML Report](./images/loki-html-report.png)
+
+The HTML report shares the same base filename as the JSONL output (e.g., `loki_hostname_2025-01-08.html`). To disable report generation, use `--no-html`.
 
 ## Building from Source
 

@@ -509,10 +509,13 @@ fn scan_memory_buffer(
     let mut warning_count = 0;
     let mut notice_count = 0;
     
-    // Convert timestamps
-    let _mtime = Utc.timestamp_opt(timestamps.0, 0).single().unwrap_or_else(|| Utc::now());
-    let _atime = Utc.timestamp_opt(timestamps.1, 0).single().unwrap_or_else(|| Utc::now());
-    let _ctime = Utc.timestamp_opt(timestamps.2, 0).single().unwrap_or_else(|| Utc::now());
+    // Convert timestamps (mtime, atime, ctime) to RFC3339 strings
+    let mtime_str = Utc.timestamp_opt(timestamps.0, 0).single()
+        .map(|dt| dt.to_rfc3339());
+    let atime_str = Utc.timestamp_opt(timestamps.1, 0).single()
+        .map(|dt| dt.to_rfc3339());
+    let ctime_str = Utc.timestamp_opt(timestamps.2, 0).single()
+        .map(|dt| dt.to_rfc3339());
 
     let mut sample_matches = ArrayVec::<GenMatch, 100>::new();
 
@@ -531,6 +534,7 @@ fn scan_memory_buffer(
                         score: fioc.score,
                         description: Some(fioc.description.clone()),
                         author: None,
+                        reference: None,
                         matched_strings: None,
                     });
                     logger.debug(&format!("Filename IOC match FILE: {} PATTERN: {} SCORE: {}", path_display, fioc.pattern, fioc.score));
@@ -561,6 +565,7 @@ fn scan_memory_buffer(
                  score: ioc.score,
                  description: Some(ioc.description.clone()),
                  author: None,
+                 reference: None,
                  matched_strings: None,
              });
         }
@@ -571,6 +576,7 @@ fn scan_memory_buffer(
                  score: ioc.score,
                  description: Some(ioc.description.clone()),
                  author: None,
+                 reference: None,
                  matched_strings: None,
              });
         }
@@ -581,6 +587,7 @@ fn scan_memory_buffer(
                  score: ioc.score,
                  description: Some(ioc.description.clone()),
                  author: None,
+                 reference: None,
                  matched_strings: None,
              });
         }
@@ -590,9 +597,9 @@ fn scan_memory_buffer(
         md5: md5_value.clone(),
         sha1: sha1_value.clone(),
         sha256: sha256_value.clone(),
-        atime: _atime.to_rfc3339(),
-        mtime: _mtime.to_rfc3339(),
-        ctime: _ctime.to_rfc3339(),
+        atime: atime_str.clone().unwrap_or_default(),
+        mtime: mtime_str.clone().unwrap_or_default(),
+        ctime: ctime_str.clone().unwrap_or_default(),
     };
 
     // 3. YARA Scan
@@ -613,6 +620,7 @@ fn scan_memory_buffer(
                 score: ymatch.score,
                 description: if ymatch.description.is_empty() { None } else { Some(ymatch.description.clone()) },
                 author: if ymatch.author.is_empty() { None } else { Some(ymatch.author.clone()) },
+                reference: if ymatch.reference.is_empty() { None } else { Some(ymatch.reference.clone()) },
                 matched_strings: if ymatch.matched_strings.is_empty() { None } else { Some(ymatch.matched_strings.clone()) },
             });
         }
@@ -648,6 +656,7 @@ fn scan_memory_buffer(
                 score: m.score,
                 description: m.description.clone(),
                 author: m.author.clone(),
+                reference: m.reference.clone(),
                 matched_strings: m.matched_strings.clone(),
             })
             .collect();
@@ -662,7 +671,9 @@ fn scan_memory_buffer(
             &md5_value,
             &sha1_value,
             &sha256_value,
-            shown_reasons
+            shown_reasons,
+            // Timestamps: (created, modified, accessed)
+            Some((ctime_str.clone(), mtime_str.clone(), atime_str.clone())),
         );
     }
     
@@ -711,6 +722,7 @@ fn scan_file(rules: &Rules, file_content: &[u8], scan_config: &ScanConfig, ext_v
                     // Extract metadata from rule
                     let mut description = String::new();
                     let mut author = String::new();
+                    let mut reference = String::new();
                     let mut score = 75; // Default score
                     
                     // Get rule metadata - YARA-X metadata() returns iterator of (key, MetaValue)
@@ -726,6 +738,12 @@ fn scan_file(rules: &Rules, file_content: &[u8], scan_config: &ScanConfig, ext_v
                             "author" => {
                                 match value {
                                     yara_x::MetaValue::String(s) => author = s.to_string(),
+                                    _ => {}
+                                }
+                            }
+                            "reference" => {
+                                match value {
+                                    yara_x::MetaValue::String(s) => reference = s.to_string(),
                                     _ => {}
                                 }
                             }
@@ -775,6 +793,7 @@ fn scan_file(rules: &Rules, file_content: &[u8], scan_config: &ScanConfig, ext_v
                             score: score,
                             description: description,
                             author: author,
+                            reference: reference,
                             matched_strings: matched_strings,
                         }
                     );

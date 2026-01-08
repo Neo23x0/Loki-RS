@@ -90,11 +90,17 @@ fn main() {
 }
 
 fn print_banner() {
-    println!("{}", "    __    ____  __ __ ____   __  __ __  _ __".bright_green());
-    println!("{}", "   / /   / __ \\/ //_//  _/  / / / // /_(_) /".bright_green());
-    println!("{}", "  / /   / / / / ,<   / /   / / / // __/ / / ".bright_green());
-    println!("{}", " / /___/ /_/ / /| |_/ /   / /_/ // /_/ / /  ".bright_green());
-    println!("{}", "/_____/\\____/_/ |_/___/   \\____/ \\__/_/_/   ".bright_green());
+    println!("{}", "   ::             x.".bright_green());
+    println!("{}", "   ;.             xX".bright_green());
+    println!("{}", "   .x            :$x".bright_green());
+    println!("{}", "    ++           Xx".bright_green());
+    println!("{}", "    .X:  ..;.   ;+.".bright_green());
+    println!("{}", "     :xx +XXX;+::.".bright_green());
+    println!("{}", "       :xx+$;.:.".bright_green());
+    println!("{}", "          .X+:;;".bright_green());
+    println!("{}", "           ;  :.".bright_green());
+    println!("{}", "        .    x+".bright_green());
+    println!("{}", "         :   +".bright_green());
     println!();
     println!("   {} v{}", "Loki-RS Utility".bold().bright_green(), VERSION);
     println!("   {}", "Florian Roth 2026".dimmed());

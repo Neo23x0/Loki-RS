@@ -71,6 +71,8 @@ pub struct MatchReason {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub author: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub reference: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub matched_strings: Option<Vec<String>>,
 }
 
@@ -113,6 +115,14 @@ pub struct LogEvent {
     pub sha1: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sha256: Option<String>,
+    
+    // File timestamps (RFC3339 format)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub file_created: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub file_modified: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub file_accessed: Option<String>,
     
     // Process-specific extended metadata
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -700,6 +710,7 @@ impl UnifiedLogger {
             // Defaults
             file_path: None, pid: None, process_name: None, score: None,
             file_type: None, file_size: None, md5: None, sha1: None, sha256: None, reasons: None,
+            file_created: None, file_modified: None, file_accessed: None,
             start_time: None, run_time: None, memory_bytes: None, cpu_usage: None, connection_count: None, listening_ports: None,
         });
     }
@@ -714,6 +725,7 @@ impl UnifiedLogger {
             context: BTreeMap::new(),
             file_path: None, pid: None, process_name: None, score: None,
             file_type: None, file_size: None, md5: None, sha1: None, sha256: None, reasons: None,
+            file_created: None, file_modified: None, file_accessed: None,
             start_time: None, run_time: None, memory_bytes: None, cpu_usage: None, connection_count: None, listening_ports: None,
         });
     }
@@ -737,6 +749,7 @@ impl UnifiedLogger {
             context: context_map,
             file_path: None, pid: None, process_name: None, score: None,
             file_type: None, file_size: None, md5: None, sha1: None, sha256: None, reasons: None,
+            file_created: None, file_modified: None, file_accessed: None,
             start_time: None, run_time: None, memory_bytes: None, cpu_usage: None, connection_count: None, listening_ports: None,
         });
     }
@@ -760,6 +773,7 @@ impl UnifiedLogger {
             context: context_map,
             file_path: None, pid: None, process_name: None, score: None,
             file_type: None, file_size: None, md5: None, sha1: None, sha256: None, reasons: None,
+            file_created: None, file_modified: None, file_accessed: None,
             start_time: None, run_time: None, memory_bytes: None, cpu_usage: None, connection_count: None, listening_ports: None,
         });
     }
@@ -783,6 +797,7 @@ impl UnifiedLogger {
             context: context_map,
             file_path: None, pid: None, process_name: None, score: None,
             file_type: None, file_size: None, md5: None, sha1: None, sha256: None, reasons: None,
+            file_created: None, file_modified: None, file_accessed: None,
             start_time: None, run_time: None, memory_bytes: None, cpu_usage: None, connection_count: None, listening_ports: None,
         });
     }
@@ -797,6 +812,7 @@ impl UnifiedLogger {
             context: BTreeMap::new(),
             file_path: None, pid: None, process_name: None, score: None,
             file_type: None, file_size: None, md5: None, sha1: None, sha256: None, reasons: None,
+            file_created: None, file_modified: None, file_accessed: None,
             start_time: None, run_time: None, memory_bytes: None, cpu_usage: None, connection_count: None, listening_ports: None,
         });
     }
@@ -813,7 +829,10 @@ impl UnifiedLogger {
         sha1: &str,
         sha256: &str,
         reasons: Vec<MatchReason>,
+        // File timestamps (created, modified, accessed) - RFC3339 strings
+        timestamps: Option<(Option<String>, Option<String>, Option<String>)>,
     ) {
+        let (file_created, file_modified, file_accessed) = timestamps.unwrap_or((None, None, None));
         self.log(LogEvent {
             timestamp: Utc::now(),
             level,
@@ -828,6 +847,9 @@ impl UnifiedLogger {
             md5: Some(md5.to_string()),
             sha1: Some(sha1.to_string()),
             sha256: Some(sha256.to_string()),
+            file_created,
+            file_modified,
+            file_accessed,
             reasons: Some(reasons),
             // Defaults
             pid: None, process_name: None,
@@ -876,6 +898,7 @@ impl UnifiedLogger {
 
             // Defaults
             file_path: None, file_type: None, file_size: None,
+            file_created: None, file_modified: None, file_accessed: None,
         });
     }
 }

@@ -1,6 +1,6 @@
 [package]
 name = "loki"
-version = "2.4.4-beta"
+version = "2.4.5-beta"
 edition = "2021"
 
 [[bin]]
@@ -30,7 +30,7 @@ sha1 = "0.10"
 sha2 = "0.10.*"
 hex = "0.4.*"
 memmap2 = "0.9"
-chrono = "0.4"
+chrono = { version = "0.4", features = ["serde"] }
 regex = "1"
 yara-x = "1.10.0"
 zip = "2.2"
@@ -45,6 +45,7 @@ ureq = { version = "2.9", features = ["json", "tls"] }
 dialoguer = "0.11"
 ratatui = "0.28"
 crossterm = "0.28"
+get_if_addrs = "0.5"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

@@ -313,6 +313,7 @@ fn process_single_process(
                             score: fioc.score,
                             description: Some(fioc.description.clone()),
                             author: None,
+                            reference: None,
                             matched_strings: None,
                         }
                     );
@@ -349,6 +350,7 @@ fn process_single_process(
                     score: ioc.score,
                     description: Some(ioc.description.clone()),
                     author: None,
+                    reference: None,
                     matched_strings: None,
                 }
             );
@@ -373,6 +375,7 @@ fn process_single_process(
                     
                     let mut description = String::new();
                     let mut author = String::new();
+                    let mut reference = String::new();
                     let mut score = 75;
                     
                     for (key, value) in matching_rule.metadata() {
@@ -385,6 +388,11 @@ fn process_single_process(
                             "author" => {
                                 if let yara_x::MetaValue::String(s) = value {
                                     author = s.to_string();
+                                }
+                            }
+                            "reference" => {
+                                if let yara_x::MetaValue::String(s) = value {
+                                    reference = s.to_string();
                                 }
                             }
                             "score" => {
@@ -428,6 +436,7 @@ fn process_single_process(
                             score,
                             description: if description.is_empty() { None } else { Some(description) },
                             author: if author.is_empty() { None } else { Some(author) },
+                            reference: if reference.is_empty() { None } else { Some(reference) },
                             matched_strings: if matched_strings.is_empty() { None } else { Some(matched_strings) },
                         }
                     );
@@ -450,6 +459,7 @@ fn process_single_process(
                         score: c2_ioc.score,
                         description: Some(c2_ioc.description.clone()),
                         author: None,
+                        reference: None,
                         matched_strings: None,
                     }
                 );
@@ -490,6 +500,7 @@ fn process_single_process(
                 score: r.score,
                 description: r.description.clone(),
                 author: r.author.clone(),
+                reference: r.reference.clone(),
                 matched_strings: r.matched_strings.clone(),
             })
             .collect();

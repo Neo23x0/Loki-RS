@@ -1,6 +1,7 @@
 use std::env;
+use std::net::IpAddr;
 use human_bytes::human_bytes;
-use sysinfo::{System, Disks};
+use sysinfo::{System, Disks, Networks};
 use crate::helpers::unified_logger::UnifiedLogger;
 
 // Evaluate platform & environment information
@@ -17,23 +18,71 @@ pub fn evaluate_env(logger: &UnifiedLogger) {
     // CPU
     let cpus = sys.cpus();
     if !cpus.is_empty() {
-        logger.info(&format!("CPU information NUM_CORES: {} FREQUENCY: {} VENDOR: {:?}", 
+        logger.info(&format!("CPU information NUM_CORES: {} FREQUENCY: {} MHz VENDOR: {:?}", 
         cpus.len(), cpus[0].frequency(), cpus[0].vendor_id()));
     }
     // Memory
-    logger.info(&format!("Memory information TOTAL: {:?} USED: {:?}", 
-    human_bytes(sys.total_memory() as f64), human_bytes(sys.used_memory() as f64)));
+    logger.info(&format!("Memory information TOTAL: {} USED: {} FREE: {}", 
+        human_bytes(sys.total_memory() as f64), 
+        human_bytes(sys.used_memory() as f64),
+        human_bytes((sys.total_memory() - sys.used_memory()) as f64)));
+    
+    // Network interfaces and IP addresses
+    let networks = Networks::new_with_refreshed_list();
+    let mut ip_addresses: Vec<String> = Vec::new();
+    
+    for (interface_name, _network) in networks.iter() {
+        // Skip loopback and virtual interfaces for cleaner output
+        let name_lower = interface_name.to_lowercase();
+        if name_lower.contains("lo") || name_lower.contains("loopback") {
+            continue;
+        }
+        
+        // Get IP addresses for this interface using the network_interfaces approach
+        if let Ok(interfaces) = get_if_addrs::get_if_addrs() {
+            for iface in interfaces {
+                if iface.name == *interface_name {
+                    let ip = iface.addr.ip();
+                    // Skip loopback IPs
+                    if !ip.is_loopback() {
+                        let ip_str = match ip {
+                            IpAddr::V4(v4) => format!("{}: {} (IPv4)", interface_name, v4),
+                            IpAddr::V6(v6) => format!("{}: {} (IPv6)", interface_name, v6),
+                        };
+                        if !ip_addresses.contains(&ip_str) {
+                            ip_addresses.push(ip_str);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    
+    if ip_addresses.is_empty() {
+        // Fallback: just list the interfaces without IPs
+        logger.info("Network interfaces (no IP addresses detected)");
+    } else {
+        logger.info(&format!("Network interfaces IPs: {}", ip_addresses.join(", ")));
+    }
+    
     // Hard disks
     let disks = Disks::new_with_refreshed_list();
     for disk in disks.list() {
+        let used_space = disk.total_space() - disk.available_space();
+        let usage_percent = if disk.total_space() > 0 {
+            (used_space as f64 / disk.total_space() as f64) * 100.0
+        } else {
+            0.0
+        };
+        
         logger.info(&format!(
-            "Hard disk NAME: {:?} FS_TYPE: {:?} MOUNT_POINT: {:?} AVAIL: {:?} TOTAL: {:?} REMOVABLE: {:?}", 
+            "Hard disk NAME: {:?} FS: {:?} MOUNT: {:?} USED: {} / {} ({:.1}%)", 
             disk.name().to_string_lossy(), 
             disk.file_system().to_string_lossy(), 
             disk.mount_point().to_string_lossy(), 
-            human_bytes(disk.available_space() as f64),
+            human_bytes(used_space as f64),
             human_bytes(disk.total_space() as f64),
-            disk.is_removable(),
+            usage_percent,
         ));
     }
 }
