@@ -103,7 +103,19 @@ package: build fetch-signatures install-signatures ## Create a complete build pa
 	@cp USAGE.md $(BUILD_DIR)/ 2>/dev/null || echo "[!] USAGE.md not found, creating from template..."
 	@test -f $(BUILD_DIR)/USAGE.md || echo "# Loki-RS Usage Guide\n\nSee README.md for usage instructions." > $(BUILD_DIR)/USAGE.md
 	@echo "[+] Creating config files ..."
-	@test -f $(CONFIG_DIR)/excludes.cfg || cp config/excludes.cfg.example $(CONFIG_DIR)/excludes.cfg 2>/dev/null || echo "# Loki-RS Exclusions Configuration\n# Add regex patterns here, one per line\n# Example: ^/proc/.*" > $(CONFIG_DIR)/excludes.cfg
+	@test -f $(CONFIG_DIR)/excludes.cfg || printf '%s\n' \
+		"# Loki-RS Exclusions Configuration" \
+		"#" \
+		"# Add regex patterns here to exclude paths from scanning." \
+		"# One pattern per line. Lines starting with # are comments." \
+		"#" \
+		"# Examples:" \
+		"#   ^/proc/.*          - Exclude everything under /proc" \
+		"#   .*\\.log$$           - Exclude all .log files" \
+		"#   .*node_modules.*   - Exclude node_modules directories" \
+		"#" \
+		"# See config/excludes.cfg.example for more examples." \
+		> $(CONFIG_DIR)/excludes.cfg
 	@echo "[+] Copying LICENSE ..."
 	@cp LICENSE $(BUILD_DIR)/ 2>/dev/null || echo "[!] LICENSE not found"
 	@echo ""
@@ -197,7 +209,19 @@ dist: build fetch-signatures ## Create distribution package (downloads signature
 	@test -f USAGE.md && cp USAGE.md ./dist/loki/ || true
 	@echo "[+] Creating config directory ..."
 	@mkdir -p ./dist/loki/config
-	@test -f config/excludes.cfg.example && cp config/excludes.cfg.example ./dist/loki/config/excludes.cfg || echo "# Loki-RS Exclusions Configuration" > ./dist/loki/config/excludes.cfg
+	@printf '%s\n' \
+		"# Loki-RS Exclusions Configuration" \
+		"#" \
+		"# Add regex patterns here to exclude paths from scanning." \
+		"# One pattern per line. Lines starting with # are comments." \
+		"#" \
+		"# Examples:" \
+		"#   ^/proc/.*          - Exclude everything under /proc" \
+		"#   .*\\.log$$           - Exclude all .log files" \
+		"#   .*node_modules.*   - Exclude node_modules directories" \
+		"#" \
+		"# See config/excludes.cfg.example for more examples." \
+		> ./dist/loki/config/excludes.cfg
 	@rm -rf ./tmp
 	@echo "[✓] Distribution package created in ./dist/loki/"
 

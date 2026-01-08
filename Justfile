@@ -46,12 +46,20 @@ package: build install-signatures
         echo "See README.md for usage instructions." >> build/USAGE.md
     fi
     
-    # Copy config
-    if [ -f config/excludes.cfg.example ]; then
-        cp config/excludes.cfg.example build/config/excludes.cfg
-    else
-        echo "# Loki-RS Exclusions Configuration" > build/config/excludes.cfg
-    fi
+    # Copy config (create empty config, don't ship with predefined exclusions)
+    cat > build/config/excludes.cfg << 'EOF'
+# Loki-RS Exclusions Configuration
+# 
+# Add regex patterns here to exclude paths from scanning.
+# One pattern per line. Lines starting with # are comments.
+#
+# Examples:
+#   ^/proc/.*          - Exclude everything under /proc
+#   .*\.log$           - Exclude all .log files
+#   .*node_modules.*   - Exclude node_modules directories
+#
+# See config/excludes.cfg.example for more examples.
+EOF
     
     # Copy LICENSE
     [ -f LICENSE ] && cp LICENSE build/ || true
