@@ -4,7 +4,10 @@
 # Description: Run all test suites and provide a comprehensive report with verbose output
 # Expected: All tests should pass, providing confidence in the scanner's functionality
 
-set -euo pipefail
+# Note: We use 'set -uo pipefail' but NOT 'set -e' because:
+# 1. We handle test failures ourselves (tracking exit codes)
+# 2. Arithmetic operations like ((var++)) return exit code 1 when var is 0
+set -uo pipefail
 
 # Colors for output
 RED='\033[0;31m'
@@ -53,8 +56,8 @@ run_test() {
 
     if [ ! -f "$test_script" ]; then
         echo -e "${YELLOW}⚠ $test_name: SKIPPED (test script not found)${NC}"
-        ((skipped_tests++))
-        ((total_tests++))
+        skipped_tests=$((skipped_tests + 1))
+        total_tests=$((total_tests + 1))
         return
     fi
 
@@ -74,13 +77,13 @@ run_test() {
 
     if [ $exit_code -eq 0 ]; then
         echo -e "${GREEN}✓ $test_name: PASS${NC} (${duration}s)"
-        ((passed_tests++))
+        passed_tests=$((passed_tests + 1))
     else
         echo -e "${RED}✗ $test_name: FAIL (exit code: $exit_code)${NC}"
         failed_test_names+=("$test_name")
-        ((failed_tests++))
+        failed_tests=$((failed_tests + 1))
     fi
-    ((total_tests++))
+    total_tests=$((total_tests + 1))
     echo ""
 }
 
