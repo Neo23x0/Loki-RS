@@ -1,6 +1,6 @@
 [package]
 name = "loki"
-version = "2.5.2-beta"
+version = "2.5.3-beta"
 edition = "2021"
 
 [[bin]]
