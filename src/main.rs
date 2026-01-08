@@ -908,18 +908,18 @@ fn count_exclusions(config_path: &str) -> usize {
 // Welcome message
 fn welcome_message() {
     println!("------------------------------------------------------------------------");
-    println!("   ::             x.    __    ____  __ __ ____                          ");
-    println!("   ;.             xX   / /   / __ \\/ //_//  _/                          ");
-    println!("   .x            :$x  / /   / / / / ,<   / /                            ");
-    println!("    ++           Xx  / /___/ /_/ / /| |_/ /                             ");
-    println!("    .X:  ..;.   ;+. /_____/\\____/_/ |_/___/                             ");
-    println!("     :xx +XXX;+::.                                                      ");
-    println!("       :xx+$;.:.   High-Performance, Multi-threaded YARA & IOC Scanner  ");
+    println!("   ::             x.                                                    ");
+    println!("   ;.             xX    ______ _____________ _________                  ");
+    println!("   .x            :$x    ___  / __  __ \\__  //_/___  _/                  ");
+    println!("    ++           Xx     __  /  _  / / /_  ,<   __  /                    ");
+    println!("    .X:  ..;.   ;+.     _  /___/ /_/ /_  /| | __/ /                     ");
+    println!("     :xx +XXX;+::.      /_____/\\____/ /_/ |_| /___/                     ");
+    println!("       :xx+$;.:.        High-Performance YARA & IOC Scanner             ");
     println!("          .X+:;;                                                        ");
-    println!("           ;  :.   Version {} (Rust)                                    ", VERSION);
-    println!("        .    x+    Florian Roth 2026                                    ");
+    println!("           ;  :.        Version {} (Rust)                               ", VERSION);
+    println!("        .    x+         Florian Roth 2026                               ");
     println!("         :   +                                                          ");
-    println!("------------------------------------------------------------------------");                      
+    println!("------------------------------------------------------------------------");
 }
 
 /// Lock file guard to prevent multiple Loki instances from running simultaneously

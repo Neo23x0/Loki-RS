@@ -90,20 +90,19 @@ fn main() {
 }
 
 fn print_banner() {
-    println!("{}", "   ::             x.".bright_green());
-    println!("{}", "   ;.             xX".bright_green());
-    println!("{}", "   .x            :$x".bright_green());
-    println!("{}", "    ++           Xx".bright_green());
-    println!("{}", "    .X:  ..;.   ;+.".bright_green());
-    println!("{}", "     :xx +XXX;+::.".bright_green());
-    println!("{}", "       :xx+$;.:.".bright_green());
-    println!("{}", "          .X+:;;".bright_green());
-    println!("{}", "           ;  :.".bright_green());
-    println!("{}", "        .    x+".bright_green());
-    println!("{}", "         :   +".bright_green());
-    println!();
-    println!("   {} v{}", "Loki-RS Utility".bold().bright_green(), VERSION);
-    println!("   {}", "Florian Roth 2026".dimmed());
+    println!("{}", "------------------------------------------------------------------------".bright_green());
+    println!("{}", "   ::             x.                                                    ".bright_green());
+    println!("{}", "   ;.             xX    ______ _____________ _________                  ".bright_green());
+    println!("{}", "   .x            :$x    ___  / __  __ \\__  //_/___  _/                  ".bright_green());
+    println!("{}", "    ++           Xx     __  /  _  / / /_  ,<   __  /                    ".bright_green());
+    println!("{}", "    .X:  ..;.   ;+.     _  /___/ /_/ /_  /| | __/ /                     ".bright_green());
+    println!("{}", "     :xx +XXX;+::.      /_____/\\____/ /_/ |_| /___/                     ".bright_green());
+    println!("{}", "       :xx+$;.:.        High-Performance YARA & IOC Scanner             ".bright_green());
+    println!("{}", "          .X+:;;                                                        ".bright_green());
+    println!("           ;  :.        Version {} (Rust)                               ", VERSION);
+    println!("{}", "        .    x+         Florian Roth 2026                               ".bright_green());
+    println!("{}", "         :   +                                                          ".bright_green());
+    println!("{}", "------------------------------------------------------------------------".bright_green());
     println!();
 }
 

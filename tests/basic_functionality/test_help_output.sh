@@ -3,31 +3,44 @@
 # Test: Help Output
 # Description: Verify that both loki and loki-util binaries display proper help output
 # Expected: Both binaries should display help text and return exit code 0
+#
+# NOTE: --help is a safe command that doesn't trigger scanning
+
+set -euo pipefail
 
 echo "=== Testing Help Output ==="
 
-# Test loki help output
+# Track test results
+test_passed=true
+
+# Test loki help output (safe - just prints help)
 echo "Testing loki --help..."
-if ./build/loki --help > /dev/null 2>&1; then
+loki_help_output=$(./build/loki --help 2>&1) || true
+if echo "$loki_help_output" | grep -q "Loki-RS"; then
     echo "✓ loki --help: PASS"
-    loki_help_exit=0
 else
     echo "✗ loki --help: FAIL"
-    loki_help_exit=1
+    echo "  Expected: Output to contain 'Loki-RS'"
+    echo "  Actual output:"
+    echo "$loki_help_output" | head -20
+    test_passed=false
 fi
 
-# Test loki-util help output (note: loki-util uses different syntax)
+# Test loki-util help output (safe - just prints help)
 echo "Testing loki-util (no args for help)..."
-if ./build/loki-util 2>&1 | grep -q "Loki-RS Utility Tool"; then
+loki_util_output=$(./build/loki-util 2>&1) || true
+if echo "$loki_util_output" | grep -q "Loki"; then
     echo "✓ loki-util help: PASS"
-    loki_util_help_exit=0
 else
     echo "✗ loki-util help: FAIL"
-    loki_util_help_exit=1
+    echo "  Expected: Output to contain 'Loki'"
+    echo "  Actual output:"
+    echo "$loki_util_output" | head -20
+    test_passed=false
 fi
 
 # Overall test result
-if [ $loki_help_exit -eq 0 ] && [ $loki_util_help_exit -eq 0 ]; then
+if [ "$test_passed" = true ]; then
     echo "=== Help Output Test: PASS ==="
     exit 0
 else

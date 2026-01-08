@@ -1,0 +1,219 @@
+name: Tests
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+    branches: [master, main]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test:
+    name: Run Tests
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo registry
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-cargo-test-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-test-
+
+      - name: Build release binaries
+        run: cargo build --release
+
+      - name: Setup test environment
+        run: |
+          # Create build directory structure
+          mkdir -p build/config
+          mkdir -p build/signatures/yara
+          mkdir -p build/signatures/iocs
+          
+          # Copy binaries
+          cp target/release/loki build/
+          cp target/release/loki-util build/
+          
+          # Copy config
+          cp config/excludes.cfg build/config/
+          
+          # Copy signatures (use local if available)
+          if [ -d "signatures" ]; then
+            cp -r signatures/* build/signatures/
+          fi
+          
+          # Create minimal test YARA rule if no signatures exist
+          if [ ! -f "build/signatures/yara/yara-rules-core.yar" ]; then
+            echo 'rule test_placeholder { condition: false }' > build/signatures/yara/yara-rules-core.yar
+          fi
+          
+          # Create minimal IOC files if they don't exist
+          touch build/signatures/iocs/filename-iocs.txt
+          touch build/signatures/iocs/hash-iocs.txt
+          touch build/signatures/iocs/c2-iocs.txt
+          touch build/signatures/iocs/keywords.txt
+          
+          # Make test scripts executable
+          chmod +x tests/*.sh
+          chmod +x tests/**/*.sh 2>/dev/null || true
+          
+          # Show what we have
+          echo "Build directory contents:"
+          ls -la build/
+          echo ""
+          echo "Signatures directory:"
+          ls -la build/signatures/ || true
+          echo ""
+          echo "YARA directory:"
+          ls -la build/signatures/yara/ || true
+
+      - name: Verify binaries
+        run: |
+          echo "Testing loki binary..."
+          ./build/loki --version
+          echo ""
+          echo "Testing loki-util binary..."
+          ./build/loki-util || true
+
+      - name: Run test suite
+        run: |
+          chmod +x tests/run_all_tests.sh
+          ./tests/run_all_tests.sh
+
+      - name: Upload test artifacts on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-failure-logs-${{ matrix.os }}
+          path: |
+            build/*.log
+            build/*.jsonl
+          retention-days: 7
+
+  test-windows:
+    name: Run Tests (Windows)
+    runs-on: windows-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo registry
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: windows-cargo-test-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            windows-cargo-test-
+
+      - name: Build release binaries
+        run: cargo build --release
+
+      - name: Setup test environment
+        shell: pwsh
+        run: |
+          # Create build directory structure
+          New-Item -ItemType Directory -Force -Path build/config
+          New-Item -ItemType Directory -Force -Path build/signatures/yara
+          New-Item -ItemType Directory -Force -Path build/signatures/iocs
+          
+          # Copy binaries
+          Copy-Item target/release/loki.exe build/
+          Copy-Item target/release/loki-util.exe build/
+          
+          # Copy config
+          Copy-Item config/excludes.cfg build/config/
+          
+          # Copy signatures (use local if available)
+          if (Test-Path "signatures") {
+            Copy-Item -Recurse signatures/* build/signatures/
+          }
+          
+          # Create minimal test YARA rule if no signatures exist
+          if (-not (Test-Path "build/signatures/yara/yara-rules-core.yar")) {
+            "rule test_placeholder { condition: false }" | Out-File -FilePath build/signatures/yara/yara-rules-core.yar
+          }
+          
+          # Create minimal IOC files if they don't exist
+          New-Item -ItemType File -Force -Path build/signatures/iocs/filename-iocs.txt
+          New-Item -ItemType File -Force -Path build/signatures/iocs/hash-iocs.txt
+          New-Item -ItemType File -Force -Path build/signatures/iocs/c2-iocs.txt
+          New-Item -ItemType File -Force -Path build/signatures/iocs/keywords.txt
+          
+          # Show what we have
+          Write-Host "Build directory contents:"
+          Get-ChildItem build/
+
+      - name: Verify binaries
+        shell: pwsh
+        run: |
+          Write-Host "Testing loki binary..."
+          ./build/loki.exe --version
+          Write-Host ""
+          Write-Host "Testing loki-util binary..."
+          ./build/loki-util.exe
+
+      - name: Run basic tests (Windows)
+        shell: pwsh
+        run: |
+          Write-Host "=== Running Windows Tests ==="
+          
+          # Test 1: Binary existence
+          Write-Host "Test 1: Binary Existence"
+          if ((Test-Path "./build/loki.exe") -and (Test-Path "./build/loki-util.exe")) {
+            Write-Host "PASS: Binaries exist"
+          } else {
+            Write-Host "FAIL: Binaries missing"
+            exit 1
+          }
+          
+          # Test 2: Help output
+          Write-Host "Test 2: Help Output"
+          $helpOutput = ./build/loki.exe --help 2>&1
+          if ($helpOutput -match "Loki-RS") {
+            Write-Host "PASS: Help output contains Loki-RS"
+          } else {
+            Write-Host "FAIL: Help output missing expected content"
+            Write-Host $helpOutput
+            exit 1
+          }
+          
+          # Test 3: Version output
+          Write-Host "Test 3: Version Output"
+          $versionOutput = ./build/loki.exe --version 2>&1
+          if ($versionOutput -match "Version") {
+            Write-Host "PASS: Version output valid"
+          } else {
+            Write-Host "FAIL: Version output missing"
+            Write-Host $versionOutput
+            exit 1
+          }
+          
+          Write-Host "=== All Windows Tests PASSED ==="
+

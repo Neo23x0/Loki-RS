@@ -436,19 +436,41 @@ fn render_settings_panel(frame: &mut Frame, app: &TuiApp, area: Rect) {
     
     // Loki ASCII Logo (styled in green)
     let logo_style = Style::default().fg(Color::Green);
+    let text_style = Style::default().fg(Color::White);
     
     let settings_text = vec![
-        // ASCII Logo
+        // ASCII Logo with LOKI text
         Line::from(Span::styled("   ::             x.", logo_style)),
-        Line::from(Span::styled("   ;.             xX", logo_style)),
-        Line::from(Span::styled("   .x            :$x", logo_style)),
-        Line::from(Span::styled("    ++           Xx", logo_style)),
-        Line::from(Span::styled("    .X:  ..;.   ;+.", logo_style)),
-        Line::from(Span::styled("     :xx +XXX;+::.", logo_style)),
-        Line::from(Span::styled("       :xx+$;.:.", logo_style)),
+        Line::from(vec![
+            Span::styled("   ;.             xX", logo_style),
+            Span::styled("    ______ _____________ _________", text_style),
+        ]),
+        Line::from(vec![
+            Span::styled("   .x            :$x", logo_style),
+            Span::styled("    ___  / __  __ \\__  //_/___  _/", text_style),
+        ]),
+        Line::from(vec![
+            Span::styled("    ++           Xx", logo_style),
+            Span::styled("     __  /  _  / / /_  ,<   __  /", text_style),
+        ]),
+        Line::from(vec![
+            Span::styled("    .X:  ..;.   ;+.", logo_style),
+            Span::styled("     _  /___/ /_/ /_  /| | __/ /", text_style),
+        ]),
+        Line::from(vec![
+            Span::styled("     :xx +XXX;+::.", logo_style),
+            Span::styled("      /_____/\\____/ /_/ |_| /___/", text_style),
+        ]),
+        Line::from(Span::styled("       :xx+$;.:.        High-Performance YARA & IOC Scanner", logo_style)),
         Line::from(Span::styled("          .X+:;;", logo_style)),
-        Line::from(Span::styled("           ;  :.", logo_style)),
-        Line::from(Span::styled("        .    x+", logo_style)),
+        Line::from(vec![
+            Span::styled("           ;  :.", logo_style),
+            Span::styled(format!("        Version {} (Rust)", VERSION), Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
+        ]),
+        Line::from(vec![
+            Span::styled("        .    x+", logo_style),
+            Span::styled("         Florian Roth 2026", Style::default().fg(Color::DarkGray)),
+        ]),
         Line::from(Span::styled("         :   +", logo_style)),
         Line::from(""),
         // Version and copyright (centered)
@@ -462,7 +484,7 @@ fn render_settings_panel(frame: &mut Frame, app: &TuiApp, area: Rect) {
             Span::styled(" Target:", Style::default().fg(Color::Cyan)),
         ]),
         Line::from(vec![
-            Span::styled(format!("  {}", target), Style::default().fg(Color::White)),
+            Span::styled(format!(" {}", target), Style::default().fg(Color::White)),
         ]),
         Line::from(""),
         Line::from(vec![
