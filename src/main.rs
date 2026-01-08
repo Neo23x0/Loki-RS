@@ -1310,9 +1310,12 @@ fn main() {
     // Update scan_state with actual CPU limit from config
     scan_state.set_cpu_limit(scan_config.cpu_limit);
     
-    // Signal TUI that initialization is complete
+    // Signal TUI that initialization is complete with final counts
     if let Some(ref sender) = tui_sender {
-        let _ = sender.send(TuiMessage::InitComplete);
+        let _ = sender.send(TuiMessage::InitComplete { 
+            yara_rules_count: scan_config.yara_rules_count,
+            ioc_count: scan_config.ioc_count,
+        });
     }
 
     // Register available modules

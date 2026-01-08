@@ -150,8 +150,8 @@ pub enum TuiMessage {
     ScanComplete,
     /// Progress message during initialization (e.g., "Loading YARA rules...")
     InitProgress(String),
-    /// Initialization complete, ready to start scanning
-    InitComplete,
+    /// Initialization complete with final counts (yara_rules_count, ioc_count)
+    InitComplete { yara_rules_count: usize, ioc_count: usize },
 }
 
 // --- Output Trait ---

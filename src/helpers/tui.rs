@@ -276,9 +276,12 @@ impl TuiApp {
                 TuiMessage::InitProgress(message) => {
                     self.loading_message = message;
                 }
-                TuiMessage::InitComplete => {
+                TuiMessage::InitComplete { yara_rules_count, ioc_count } => {
                     self.is_loading = false;
                     self.loading_message.clear();
+                    // Update settings display with actual counts
+                    self.settings.yara_rules_count = yara_rules_count;
+                    self.settings.ioc_count = ioc_count;
                 }
             }
         }
