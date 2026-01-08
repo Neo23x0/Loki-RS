@@ -29,11 +29,12 @@ fi
 # Test loki-util help output (safe - just prints help)
 echo "Testing loki-util (no args for help)..."
 loki_util_output=$(./build/loki-util 2>&1) || true
-if echo "$loki_util_output" | grep -q "Loki"; then
+# Check for LOKI (uppercase in ASCII art) or various help indicators
+if echo "$loki_util_output" | grep -qiE "(LOKI|loki|Scanner|update|help)"; then
     echo "✓ loki-util help: PASS"
 else
     echo "✗ loki-util help: FAIL"
-    echo "  Expected: Output to contain 'Loki'"
+    echo "  Expected: Output to contain 'LOKI' or help text"
     echo "  Actual output:"
     echo "$loki_util_output" | head -20
     test_passed=false

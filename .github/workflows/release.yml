@@ -44,6 +44,12 @@ jobs:
           mkdir -p build/signatures/yara
           mkdir -p build/signatures/iocs
           
+          # ALSO create signatures and config at project root
+          # (Loki looks for ./signatures/ and ./config/ relative to cwd)
+          mkdir -p signatures/yara
+          mkdir -p signatures/iocs
+          mkdir -p config
+          
           # Copy binaries
           cp target/release/loki build/
           cp target/release/loki-util build/
@@ -53,26 +59,25 @@ jobs:
             cp config/excludes.cfg build/config/
           elif [ -f "config/excludes.cfg.example" ]; then
             cp config/excludes.cfg.example build/config/excludes.cfg
+            cp config/excludes.cfg.example config/excludes.cfg
           else
             # Create empty config
             echo "# Empty exclusions config for testing" > build/config/excludes.cfg
+            echo "# Empty exclusions config for testing" > config/excludes.cfg
           fi
           
-          # Copy signatures (use local if available)
-          if [ -d "signatures" ]; then
-            cp -r signatures/* build/signatures/
-          fi
+          # Create minimal test YARA rule
+          echo 'rule test_placeholder { meta: score = 0 condition: false }' > signatures/yara/yara-rules-core.yar
+          cp signatures/yara/yara-rules-core.yar build/signatures/yara/
           
-          # Create minimal test YARA rule if no signatures exist
-          if [ ! -f "build/signatures/yara/yara-rules-core.yar" ]; then
-            echo 'rule test_placeholder { condition: false }' > build/signatures/yara/yara-rules-core.yar
-          fi
+          # Create minimal IOC files with proper format
+          echo "# Filename IOCs for testing" > signatures/iocs/filename-iocs.txt
+          echo "# Hash IOCs for testing" > signatures/iocs/hash-iocs.txt
+          echo "# C2 IOCs for testing" > signatures/iocs/c2-iocs.txt
+          echo "# Keywords for testing" > signatures/iocs/keywords.txt
           
-          # Create minimal IOC files if they don't exist
-          touch build/signatures/iocs/filename-iocs.txt
-          touch build/signatures/iocs/hash-iocs.txt
-          touch build/signatures/iocs/c2-iocs.txt
-          touch build/signatures/iocs/keywords.txt
+          # Copy to build as well
+          cp signatures/iocs/* build/signatures/iocs/
           
           # Make test scripts executable
           chmod +x tests/*.sh
