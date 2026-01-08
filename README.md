@@ -180,7 +180,11 @@ Requires Rust toolchain. See [docs/BUILD.md](docs/BUILD.md) for cross-compilatio
 
 ## About
 
-A side project. For enterprise-grade scanning with extensive features and support, check out [THOR](https://www.nextron-systems.com/) from Nextron Systems.
+Loki RS is a side project. It’s a fast, single-binary scanner built for practical triage and experimentation, and it may change quickly as ideas get tried and removed.
+
+Support is community-based and best-effort - no SLA, no guaranteed response times, and no promise that every edge case is handled perfectly. If you run it in production, do it with that in mind.
+
+For corporate environments and incident response work with predictable support and a broader, well-tested feature set, Nextron Systems maintains [THOR](https://www.nextron-systems.com/) (and THOR Lite). THOR is the professional scanner with extensive artifact coverage, more modules and formats, and vendor support. THOR Lite is the free entry version with a reduced scope.
 
 ## License
 
