@@ -49,14 +49,14 @@ Loki-RS uses detection content from two sources:
 ## Usage
 
 ```bash
-# Basic scan
+# Basic scan (TUI enabled by default)
 sudo ./loki
 
 # Scan specific folder
 sudo ./loki --folder /tmp
 
-# Launch TUI
-sudo ./loki --tui
+# Disable TUI, use standard command-line output
+sudo ./loki --no-tui
 ```
 
 ## Common Scenarios
@@ -102,6 +102,7 @@ sudo ./loki --remote syslog-host.internal:514 --remote-proto udp
 | `-j, --jsonl <FILE>` | auto | JSONL output file |
 | `--no-jsonl` | `false` | Disable JSONL output |
 | `--no-html` | `false` | Disable HTML report generation |
+| `--no-tui` | `false` | Disable TUI, use standard command-line output |
 | `-r, --remote <HOST:PORT>` | none | Remote syslog destination |
 | `-p, --remote-proto <PROTO>` | `udp` | Remote protocol (udp/tcp) |
 | `--remote-format <FMT>` | `syslog` | Remote format (syslog/json) |
@@ -124,14 +125,13 @@ sudo ./loki --remote syslog-host.internal:514 --remote-proto udp
 | `-d, --debug` | `false` | Show debug output |
 | `--trace` | `false` | Show verbose trace output |
 | `--show-access-errors` | `false` | Show file/process access errors |
-| `--tui` | `false` | Launch interactive TUI mode |
 
 ## TUI Mode
 
-The terminal interface provides real-time monitoring during scans.
+The terminal interface is enabled by default and provides real-time monitoring during scans.
 
 ```bash
-sudo ./loki --tui --folder /path/to/scan
+sudo ./loki --folder /path/to/scan
 ```
 
 | Key | Action |
