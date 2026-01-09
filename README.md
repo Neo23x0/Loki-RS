@@ -17,7 +17,7 @@ A rewrite of [Loki](https://github.com/Neo23x0/Loki) in Rust. High-performance, 
 - HTML report generation with detailed findings
 - Configurable scoring thresholds
 - Smart filtering (skips /proc, /sys, mounted drives by default)
-- Magic header detection for executables
+- Magic header detection
 - JSONL output for log ingestion
 
 ## Installation
