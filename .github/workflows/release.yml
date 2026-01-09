@@ -318,5 +318,5 @@ jobs:
           files: |
             artifacts/**/*
           draft: false
-          prerelease: ${{ contains(steps.version.outputs.VERSION, '-') }}
+          prerelease: false
           tag_name: ${{ steps.version.outputs.VERSION }}
