@@ -203,7 +203,7 @@ jobs:
           ./build/loki.exe --version
           Write-Host ""
           Write-Host "Testing loki-util binary..."
-          ./build/loki-util.exe
+          ./build/loki-util.exe --help
 
       - name: Run basic tests (Windows)
         shell: pwsh

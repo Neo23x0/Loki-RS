@@ -53,9 +53,17 @@ fn main() {
     let args: Vec<String> = std::env::args().collect();
     
     if args.len() < 2 {
-        if let Err(e) = interactive_mode() {
-            log_error(&format!("Interactive mode error: {}", e));
-            std::process::exit(1);
+        // Check if running in a TTY (interactive terminal)
+        // If not, print usage instead of trying interactive mode
+        if atty::is(atty::Stream::Stdin) {
+            if let Err(e) = interactive_mode() {
+                log_error(&format!("Interactive mode error: {}", e));
+                std::process::exit(1);
+            }
+        } else {
+            // Not running in a TTY (e.g., CI/CD, pipes, etc.)
+            // Print usage information instead
+            print_usage();
         }
         return;
     }

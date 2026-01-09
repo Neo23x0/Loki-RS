@@ -134,6 +134,8 @@ The terminal interface is enabled by default and provides real-time monitoring d
 sudo ./loki --folder /path/to/scan
 ```
 
+![Loki in Action](./images/loki-rs-run.gif)
+
 | Key | Action |
 |-----|--------|
 | `q` | Quit |
