@@ -1969,9 +1969,9 @@ fn html_escape(s: &str) -> String {
 }
 
 fn format_size(bytes: usize) -> String {
-    const KB: usize = 1024;
-    const MB: usize = KB * 1024;
-    const GB: usize = MB * 1024;
+    const KB: usize = 1_000;
+    const MB: usize = KB * 1_000;
+    const GB: usize = MB * 1_000;
     
     if bytes >= GB {
         format!("{:.1} GB", bytes as f64 / GB as f64)

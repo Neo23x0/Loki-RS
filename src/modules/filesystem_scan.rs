@@ -317,6 +317,16 @@ fn process_file_entry(
         state.increment_files();
     }
     
+    // Always exclude the program's own directory to prevent scanning itself
+    if let Some(ref program_dir) = scan_config.program_dir {
+        let program_dir_path = Path::new(program_dir);
+        if file_path.starts_with(program_dir_path) {
+            logger.debug(&format!("Skipping program directory FILE: {} PROGRAM_DIR: {}", file_path_str, program_dir));
+            if let Some(state) = scan_state { state.increment_skipped(); }
+            return (0, 0, 0, 0, 0);
+        }
+    }
+    
     // Determine if we should exclude mounted devices
     let exclude_mounted = !scan_config.scan_all_drives;
 

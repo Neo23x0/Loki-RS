@@ -196,6 +196,7 @@ pub struct ScanConfig {
     pub exclusion_count: usize,
     pub yara_rules_count: usize,
     pub ioc_count: usize,
+    pub program_dir: Option<String>,
 }
 
 #[derive(Debug)]
@@ -1176,6 +1177,11 @@ fn main() {
     // Count exclusions from config file
     let exclusion_count = count_exclusions("./config/excludes.cfg");
     
+    // Get program directory to exclude it from scanning
+    let program_dir = std::env::current_exe()
+        .ok()
+        .and_then(|exe_path| exe_path.parent().map(|p| p.to_string_lossy().to_string()));
+    
     // Set some default values for target folder (needed for TUI)
     let mut target_folder: String = '/'.to_string(); 
     if get_os_type() == "windows" { target_folder = "C:\\".to_string(); }
@@ -1199,6 +1205,7 @@ fn main() {
         exclusion_count,
         yara_rules_count: 0,
         ioc_count: 0,
+        program_dir,
     };
     
     // Print scan configuration limits
@@ -1807,6 +1814,7 @@ mod tests {
                 exclusion_count: 0,
                 yara_rules_count: 0,
                 ioc_count: 0,
+                program_dir: None,
             };
 
             assert_eq!(config.max_file_size, 64_000_000);
@@ -1833,6 +1841,7 @@ mod tests {
                 exclusion_count: 0,
                 yara_rules_count: 0,
                 ioc_count: 0,
+                program_dir: None,
             };
 
             assert!(80 >= 60);
