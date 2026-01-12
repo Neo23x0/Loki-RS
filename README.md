@@ -8,7 +8,7 @@ A rewrite of [Loki](https://github.com/Neo23x0/Loki) in Rust. High-performance, 
 
 ## Features
 
-- YARA scanning of files and process memory
+- YARA scanning of files and process memory (yara-x)
 - IOC matching (MD5/SHA1/SHA256 hashes, filename patterns, C2 indicators)
 - Multi-threaded scanning with configurable thread count
 - Archive scanning (ZIP files)
