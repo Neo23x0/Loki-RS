@@ -19,13 +19,23 @@ use zip::ZipArchive;
 #[cfg(windows)]
 use windows::core::{PCWSTR, HSTRING};
 #[cfg(windows)]
-use windows::Win32::Storage::FileSystem::GetDriveTypeW;
+use windows::Win32::Storage::FileSystem::{GetDriveTypeW, GetLogicalDrives};
 
 // Define constants manually to avoid import issues
 #[cfg(windows)]
-const DRIVE_REMOTE: u32 = 4;
+const DRIVE_UNKNOWN: u32 = 0;
 #[cfg(windows)]
 const DRIVE_NO_ROOT_DIR: u32 = 1;
+#[cfg(windows)]
+const DRIVE_REMOVABLE: u32 = 2;
+#[cfg(windows)]
+const DRIVE_FIXED: u32 = 3;
+#[cfg(windows)]
+const DRIVE_REMOTE: u32 = 4;
+#[cfg(windows)]
+const DRIVE_CDROM: u32 = 5;
+#[cfg(windows)]
+const DRIVE_RAMDISK: u32 = 6;
 
 use crate::{ScanConfig, GenMatch, HashIOCCollections, FalsePositiveHashCollections, ExtVars, YaraMatch, FilenameIOC, find_hash_ioc};
 use crate::helpers::score::calculate_weighted_score;
@@ -184,6 +194,226 @@ fn is_network_drive(_path: &str) -> bool {
     false
 }
 
+// Check if a filesystem type is a network filesystem (Linux/macOS)
+fn is_network_filesystem(fs_type: &str) -> bool {
+    let fs_lower = fs_type.to_lowercase();
+    matches!(
+        fs_lower.as_str(),
+        "nfs" | "nfs4" | "cifs" | "smbfs" | "smb3" | "sshfs" | "fuse.sshfs" | "afp" | "webdav" | "davfs2"
+    )
+}
+
+// Enumerate Windows drives based on scan configuration
+#[cfg(windows)]
+pub fn enumerate_windows_drives(scan_hard_drives: bool, scan_all_drives: bool) -> Vec<String> {
+    let mut drives = Vec::new();
+    
+    if !scan_hard_drives && !scan_all_drives {
+        return drives;
+    }
+    
+    let drive_mask = unsafe { GetLogicalDrives() };
+    
+    for i in 0..26 {
+        if (drive_mask & (1 << i)) != 0 {
+            let drive_letter = (b'A' + i as u8) as char;
+            let drive_path = format!("{}:\\", drive_letter);
+            
+            let h_drive = HSTRING::from(&drive_path);
+            let drive_type = unsafe { GetDriveTypeW(PCWSTR(h_drive.as_ptr())) };
+            
+            // Skip invalid drives
+            if drive_type == DRIVE_NO_ROOT_DIR {
+                continue;
+            }
+            
+            // Filter based on flags
+            if scan_hard_drives {
+                // Only include fixed drives (local hard drives)
+                if drive_type == DRIVE_FIXED {
+                    drives.push(drive_path);
+                }
+            } else if scan_all_drives {
+                // Include all drives (fixed, removable, CD-ROM, network, etc.)
+                if drive_type != DRIVE_NO_ROOT_DIR && drive_type != DRIVE_UNKNOWN {
+                    drives.push(drive_path);
+                }
+            }
+        }
+    }
+    
+    drives
+}
+
+// Enumerate Linux mount points based on scan configuration
+#[cfg(target_os = "linux")]
+pub fn enumerate_linux_mounts(scan_hard_drives: bool, scan_all_drives: bool) -> Vec<String> {
+    let mut mounts = Vec::new();
+    
+    if !scan_hard_drives && !scan_all_drives {
+        return mounts;
+    }
+    
+    // Read /proc/mounts
+    if let Ok(content) = fs::read_to_string("/proc/mounts") {
+        let mut root_found = false;
+        
+        for line in content.lines() {
+            let parts: Vec<&str> = line.split_whitespace().collect();
+            if parts.len() < 3 {
+                continue;
+            }
+            
+            let mount_point = parts[1];
+            let fs_type = parts[2];
+            
+            // Skip special filesystems
+            let special_fs = matches!(
+                fs_type,
+                "proc" | "sysfs" | "devtmpfs" | "devpts" | "tmpfs" | "cgroup" | "cgroup2" | "pstore" | "bpf" | "tracefs" | "debugfs" | "securityfs" | "hugetlbfs" | "mqueue" | "overlay" | "autofs"
+            );
+            
+            if special_fs {
+                continue;
+            }
+            
+            // Track if root filesystem is found
+            if mount_point == "/" {
+                root_found = true;
+            }
+            
+            if scan_hard_drives {
+                // Only include local filesystems
+                if !is_network_filesystem(fs_type) {
+                    if !mounts.contains(&mount_point.to_string()) {
+                        mounts.push(mount_point.to_string());
+                    }
+                }
+            } else if scan_all_drives {
+                // Include all filesystems including network
+                if !mounts.contains(&mount_point.to_string()) {
+                    mounts.push(mount_point.to_string());
+                }
+            }
+        }
+        
+        // Always ensure root is included if it's a local filesystem and scan_hard_drives is set
+        if scan_hard_drives && !root_found {
+            // Try to add root if it wasn't found (shouldn't happen, but safety check)
+            if !mounts.contains(&"/".to_string()) {
+                mounts.insert(0, "/".to_string());
+            }
+        }
+    }
+    
+    mounts
+}
+
+// Enumerate macOS mount points based on scan configuration
+#[cfg(target_os = "macos")]
+pub fn enumerate_macos_mounts(scan_hard_drives: bool, scan_all_drives: bool) -> Vec<String> {
+    let mut mounts = Vec::new();
+    
+    if !scan_hard_drives && !scan_all_drives {
+        return mounts;
+    }
+    
+    // Always include root filesystem
+    if scan_hard_drives || scan_all_drives {
+        mounts.push("/".to_string());
+    }
+    
+    // Read /etc/mtab for mount information on macOS
+    // Note: /etc/mtab may not exist on all macOS versions, so we also check /Volumes
+    if let Ok(content) = fs::read_to_string("/etc/mtab") {
+        for line in content.lines() {
+            let parts: Vec<&str> = line.split_whitespace().collect();
+            if parts.len() < 3 {
+                continue;
+            }
+            
+            let mount_point = parts[1];
+            let fs_type = parts[2];
+            
+            // Skip root (already added)
+            if mount_point == "/" {
+                continue;
+            }
+            
+            // Skip special filesystems
+            let special_fs = matches!(
+                fs_type,
+                "devfs" | "fdesc" | "linprocfs" | "linsysfs" | "tmpfs"
+            );
+            
+            if special_fs {
+                continue;
+            }
+            
+            if scan_hard_drives {
+                // Only include local filesystems
+                if !is_network_filesystem(fs_type) {
+                    if !mounts.contains(&mount_point.to_string()) {
+                        mounts.push(mount_point.to_string());
+                    }
+                }
+            } else if scan_all_drives {
+                // Include all filesystems including network
+                if !mounts.contains(&mount_point.to_string()) {
+                    mounts.push(mount_point.to_string());
+                }
+            }
+        }
+    }
+    
+    // Also scan /Volumes directory for external drives on macOS
+    // This catches drives that might not be in /etc/mtab
+    if scan_hard_drives || scan_all_drives {
+        if let Ok(entries) = fs::read_dir("/Volumes") {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    let mount_path = path.to_string_lossy().to_string();
+                    // Only add if not already in list and if scan_hard_drives, check it's not a network mount
+                    if !mounts.contains(&mount_path) {
+                        // For /Volumes, we assume they're local unless we can determine otherwise
+                        // Since we can't easily check filesystem type here, we'll include them
+                        // when scan_hard_drives is set (user wants local drives, /Volumes are typically local)
+                        if scan_hard_drives || scan_all_drives {
+                            mounts.push(mount_path);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    
+    mounts
+}
+
+// Unified function to enumerate drives/mounts based on platform
+pub fn enumerate_drives(scan_hard_drives: bool, scan_all_drives: bool) -> Vec<String> {
+    #[cfg(windows)]
+    {
+        enumerate_windows_drives(scan_hard_drives, scan_all_drives)
+    }
+    
+    #[cfg(target_os = "linux")]
+    {
+        enumerate_linux_mounts(scan_hard_drives, scan_all_drives)
+    }
+    
+    #[cfg(target_os = "macos")]
+    {
+        enumerate_macos_mounts(scan_hard_drives, scan_all_drives)
+    }
+    
+    #[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
+    {
+        Vec::new()
+    }
+}
+
 use crate::modules::{ScanModule, ScanContext, ModuleResult};
 
 pub struct FileScanModule;
@@ -221,8 +451,22 @@ pub fn scan_path (
     let cpu_limit = scan_config.cpu_limit;
     
     // Check if target folder itself is on a network drive or cloud path
-    // Only check if we are NOT scanning all drives explicitly
-    if !scan_config.scan_all_drives {
+    // When scan_hard_drives is true: skip network drives but allow local drives
+    // When scan_all_drives is true: don't skip anything
+    if scan_config.scan_hard_drives {
+        // Only scan local hard drives, skip network drives
+        if is_network_drive(target_folder) {
+            logger.warning(&format!("Skipping network drive TARGET: {}", target_folder));
+            return (0, 0, 0, 0, 0);
+        }
+        
+        // Still skip cloud storage paths even when scanning hard drives
+        if is_cloud_or_remote_path(target_folder) {
+            logger.warning(&format!("Skipping cloud storage folder TARGET: {}", target_folder));
+            return (0, 0, 0, 0, 0);
+        }
+    } else if !scan_config.scan_all_drives {
+        // Default behavior: skip network drives and cloud paths
         if is_network_drive(target_folder) {
             logger.warning(&format!("Skipping network drive TARGET: {}", target_folder));
             return (0, 0, 0, 0, 0);
@@ -233,6 +477,7 @@ pub fn scan_path (
             return (0, 0, 0, 0, 0);
         }
     }
+    // When scan_all_drives is true, don't skip anything
     
     // Walk the file system (don't follow symlinks to match v1 behavior)
     let walk = WalkDir::new(target_folder)
@@ -328,10 +573,14 @@ fn process_file_entry(
     }
     
     // Determine if we should exclude mounted devices
-    let exclude_mounted = !scan_config.scan_all_drives;
+    // When scan_all_drives is true: don't exclude anything
+    // When scan_hard_drives is true: we've already enumerated the right drives, so don't exclude mounted devices
+    // Otherwise: exclude mounted devices
+    let exclude_mounted = !scan_config.scan_all_drives && !scan_config.scan_hard_drives;
 
     // Cloud/Network exclusions (skip if path contains cloud keywords)
-    if exclude_mounted && is_cloud_or_remote_path(&file_path_str) {
+    // Always exclude cloud paths unless scan_all_drives is true
+    if !scan_config.scan_all_drives && is_cloud_or_remote_path(&file_path_str) {
         logger.debug(&format!("Skipping cloud storage path FILE: {}", file_path_str));
         if let Some(state) = scan_state { state.increment_skipped(); }
         return (0, 0, 0, 0, 0);

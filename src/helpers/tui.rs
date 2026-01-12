@@ -126,6 +126,7 @@ struct SettingsDisplay {
     cpu_limit: u8,
     max_file_size: String,
     scan_all_types: bool,
+    scan_hard_drives: bool,
     scan_all_drives: bool,
     exclusion_count: usize,
     yara_rules_count: usize,
@@ -148,6 +149,7 @@ impl SettingsDisplay {
             cpu_limit: config.cpu_limit,
             max_file_size,
             scan_all_types: config.scan_all_types,
+            scan_hard_drives: config.scan_hard_drives,
             scan_all_drives: config.scan_all_drives,
             exclusion_count: config.exclusion_count,
             yara_rules_count: config.yara_rules_count,
@@ -518,6 +520,13 @@ fn render_settings_panel(frame: &mut Frame, app: &TuiApp, area: Rect) {
             Span::styled(
                 if app.settings.scan_all_types { "Yes" } else { "No" },
                 Style::default().fg(if app.settings.scan_all_types { Color::Green } else { Color::DarkGray }),
+            ),
+        ]),
+        Line::from(vec![
+            Span::styled(" Hard Drives: ", Style::default().fg(Color::Cyan)),
+            Span::styled(
+                if app.settings.scan_hard_drives { "Yes" } else { "No" },
+                Style::default().fg(if app.settings.scan_hard_drives { Color::Green } else { Color::DarkGray }),
             ),
         ]),
         Line::from(vec![

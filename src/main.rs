@@ -43,7 +43,11 @@ struct Cli {
     #[arg(long, help_heading = "Scan Control")]
     no_archive: bool,
 
-    /// Scan all drives (including mounted drives, usb drives, cloud drives)
+    /// Scan all local hard drives (Windows: fixed drives, Linux/macOS: local filesystems)
+    #[arg(long, help_heading = "Scan Control")]
+    scan_hard_drives: bool,
+
+    /// Scan all drives (including mounted drives, usb drives, cloud drives, network drives)
     #[arg(long, help_heading = "Scan Control")]
     scan_all_drives: bool,
 
@@ -151,7 +155,7 @@ use crate::helpers::interrupt::ScanState;
 use crate::helpers::tui::run_tui;
 use crate::modules::{ScanModule, ScanContext};
 use crate::modules::process_check::ProcessCheckModule;
-use crate::modules::filesystem_scan::FileScanModule;
+use crate::modules::filesystem_scan::{FileScanModule, enumerate_drives};
 
 // Specific TODOs
 // - better error handling
@@ -185,6 +189,7 @@ pub struct ScanConfig {
     pub max_file_size: usize,
     pub show_access_errors: bool,
     pub scan_all_types: bool,
+    pub scan_hard_drives: bool,
     pub scan_all_drives: bool,
     pub scan_archives: bool,
     pub alert_threshold: i16,
@@ -1182,18 +1187,12 @@ fn main() {
         .ok()
         .and_then(|exe_path| exe_path.parent().map(|p| p.to_string_lossy().to_string()));
     
-    // Set some default values for target folder (needed for TUI)
-    let mut target_folder: String = '/'.to_string(); 
-    if get_os_type() == "windows" { target_folder = "C:\\".to_string(); }
-    if let Some(ref args_target_folder) = args.folder {
-        target_folder = args_target_folder.clone();
-    }
-    
     // Create a config (yara_rules_count and ioc_count will be set after loading)
     let mut scan_config = ScanConfig {
         max_file_size: args.max_file_size,
         show_access_errors: args.show_access_errors,
         scan_all_types: args.scan_all_files,
+        scan_hard_drives: args.scan_hard_drives,
         scan_all_drives: args.scan_all_drives,
         scan_archives: !args.no_archive,
         alert_threshold: args.alert_level,
@@ -1208,12 +1207,43 @@ fn main() {
         program_dir,
     };
     
+    // Determine target folders to scan
+    let target_folders: Vec<String> = if scan_config.scan_hard_drives || scan_config.scan_all_drives {
+        // Enumerate drives/mounts based on flags
+        let enumerated = enumerate_drives(scan_config.scan_hard_drives, scan_config.scan_all_drives);
+        if enumerated.is_empty() {
+            // Fallback to default if enumeration fails
+            let mut default: String = '/'.to_string();
+            if get_os_type() == "windows" { default = "C:\\".to_string(); }
+            vec![default]
+        } else {
+            logger.info(&format!("Found {} drive(s)/mount(s) to scan: {}", 
+                enumerated.len(), 
+                enumerated.join(", ")));
+            enumerated
+        }
+    } else {
+        // Use single folder (default or specified)
+        let mut single_folder: String = '/'.to_string(); 
+        if get_os_type() == "windows" { single_folder = "C:\\".to_string(); }
+        if let Some(ref args_target_folder) = args.folder {
+            single_folder = args_target_folder.clone();
+        }
+        vec![single_folder]
+    };
+    
+    // For TUI, use first target folder (or default)
+    let target_folder = target_folders.first().cloned().unwrap_or_else(|| {
+        if get_os_type() == "windows" { "C:\\".to_string() } else { "/".to_string() }
+    });
+    
     // Print scan configuration limits
     logger.info_w("Scan limits", &[
         ("MAX_FILE_SIZE", &format!("{} bytes ({:.1} MB)", scan_config.max_file_size, scan_config.max_file_size as f64 / 1_000_000.0)),
     ]);
     logger.info_w("Scan limits", &[
         ("SCAN_ALL_TYPES", &scan_config.scan_all_types.to_string()),
+        ("SCAN_HARD_DRIVES", &scan_config.scan_hard_drives.to_string()),
         ("SCAN_ALL_DRIVES", &scan_config.scan_all_drives.to_string())
     ]);
     if !scan_config.scan_all_types {
@@ -1344,26 +1374,82 @@ fn main() {
         if active_modules.contains(&module.name().to_string()) {
             if module.name() == "ProcessCheck" {
                  logger.info("Scanning running processes ... ");
+                 
+                 let context = ScanContext {
+                     compiled_rules: &compiled_rules,
+                     scan_config: &scan_config,
+                     hash_collections: &hash_collections,
+                     fp_hash_collections: &fp_hash_collections,
+                     filename_iocs: &filename_iocs,
+                     c2_iocs: &c2_iocs,
+                     logger: &logger,
+                     scan_state: Some(scan_state.clone()),
+                     target_folder: &target_folder,
+                 };
+                 
+                 let result = module.run(&context);
+                 module_results.insert(module.name().to_string(), result);
             } else if module.name() == "FileScan" {
-                 logger.info("Scanning local file system ... ");
+                 // For FileScan, iterate over all target folders (drives/mounts)
+                 let mut total_files_scanned = 0;
+                 let mut total_files_matched = 0;
+                 let mut total_alerts = 0;
+                 let mut total_warnings = 0;
+                 let mut total_notices = 0;
+                 
+                 for (idx, folder) in target_folders.iter().enumerate() {
+                     if scan_state.should_stop() {
+                         logger.info("Scan aborted by user.");
+                         break;
+                     }
+                     
+                     if target_folders.len() > 1 {
+                         logger.info(&format!("Scanning drive/mount {} of {}: {}", 
+                             idx + 1, target_folders.len(), folder));
+                     } else {
+                         logger.info("Scanning local file system ... ");
+                     }
+                     
+                     let context = ScanContext {
+                         compiled_rules: &compiled_rules,
+                         scan_config: &scan_config,
+                         hash_collections: &hash_collections,
+                         fp_hash_collections: &fp_hash_collections,
+                         filename_iocs: &filename_iocs,
+                         c2_iocs: &c2_iocs,
+                         logger: &logger,
+                         scan_state: Some(scan_state.clone()),
+                         target_folder: folder,
+                     };
+                     
+                     let (files_scanned, files_matched, alerts, warnings, notices) = module.run(&context);
+                     total_files_scanned += files_scanned;
+                     total_files_matched += files_matched;
+                     total_alerts += alerts;
+                     total_warnings += warnings;
+                     total_notices += notices;
+                 }
+                 
+                 module_results.insert(module.name().to_string(), 
+                     (total_files_scanned, total_files_matched, total_alerts, total_warnings, total_notices));
             } else {
                  logger.info_w("Running module", &[("MODULE", module.name())]);
+                 
+                 let context = ScanContext {
+                     compiled_rules: &compiled_rules,
+                     scan_config: &scan_config,
+                     hash_collections: &hash_collections,
+                     fp_hash_collections: &fp_hash_collections,
+                     filename_iocs: &filename_iocs,
+                     c2_iocs: &c2_iocs,
+                     logger: &logger,
+                     scan_state: Some(scan_state.clone()),
+                     target_folder: &target_folder,
+                 };
+                 
+                 let result = module.run(&context);
+                 module_results.insert(module.name().to_string(), result);
             }
-
-            let context = ScanContext {
-                compiled_rules: &compiled_rules,
-                scan_config: &scan_config,
-                hash_collections: &hash_collections,
-                fp_hash_collections: &fp_hash_collections,
-                filename_iocs: &filename_iocs,
-                c2_iocs: &c2_iocs,
-                logger: &logger,
-                scan_state: Some(scan_state.clone()),
-                target_folder: &target_folder,
-            };
-            
-            let result = module.run(&context);
-            module_results.insert(module.name().to_string(), result);
         }
     }
 
@@ -1803,6 +1889,7 @@ mod tests {
                 max_file_size: 64_000_000,
                 show_access_errors: false,
                 scan_all_types: false,
+                scan_hard_drives: false,
                 scan_all_drives: false,
                 scan_archives: true,
                 alert_threshold: 80,
@@ -1830,6 +1917,7 @@ mod tests {
                 max_file_size: 64_000_000,
                 show_access_errors: false,
                 scan_all_types: false,
+                scan_hard_drives: false,
                 scan_all_drives: false,
                 scan_archives: true,
                 alert_threshold: 80,
