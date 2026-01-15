@@ -1,3 +1,5 @@
+mod html_report;
+
 use std::fs;
 use std::io;
 use std::path::Path;
@@ -5,6 +7,7 @@ use std::process::{Command, Stdio};
 use serde_json::Value;
 use colored::*;
 use dialoguer::{Select, theme::ColorfulTheme};
+use glob::glob;
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 const SIGNATURE_BASE_URL: &str = "https://github.com/Neo23x0/signature-base/archive/master.tar.gz";
@@ -86,6 +89,12 @@ fn main() {
             }
             log_success("Loki-RS upgraded successfully!");
         }
+        "html" => {
+            if let Err(e) = handle_html_command(&args[2..]) {
+                log_error(&format!("Error generating HTML report: {}", e));
+                std::process::exit(1);
+            }
+        }
         "--help" | "-h" => {
             print_usage();
         }
@@ -120,6 +129,18 @@ fn print_usage() {
     println!("Commands:");
     println!("  {}   - Update signatures (IOCs and YARA rules)", "update".green());
     println!("  {}  - Update Loki-RS program and signatures", "upgrade".green());
+    println!("  {}    - Generate HTML report from JSONL file(s)", "html".green());
+    println!();
+    println!("HTML Report Generation:");
+    println!("  loki-util html --input <file.jsonl> --output <report.html>");
+    println!("  loki-util html --input \"*.jsonl\" --combine --output combined.html");
+    println!();
+    println!("Options:");
+    println!("  --input <file|glob>  - Input JSONL file or glob pattern");
+    println!("  --output <file.html> - Output HTML file (optional, defaults to input.html)");
+    println!("  --combine            - Combine multiple JSONL files into one report");
+    println!("  --title <str>       - Override report title");
+    println!("  --host <str>         - Override hostname");
     println!();
 }
 
@@ -513,4 +534,137 @@ fn upgrade_loki() -> Result<(), Box<dyn std::error::Error>> {
     update_signatures()?;
     
     Ok(())
+}
+
+fn handle_html_command(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
+    let mut input: Option<String> = None;
+    let mut output: Option<String> = None;
+    let mut combine = false;
+    let mut title: Option<String> = None;
+    let mut host: Option<String> = None;
+    
+    // Parse arguments
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--input" | "-i" => {
+                if i + 1 < args.len() {
+                    input = Some(args[i + 1].clone());
+                    i += 2;
+                } else {
+                    return Err("--input requires a value".into());
+                }
+            }
+            "--output" | "-o" => {
+                if i + 1 < args.len() {
+                    output = Some(args[i + 1].clone());
+                    i += 2;
+                } else {
+                    return Err("--output requires a value".into());
+                }
+            }
+            "--combine" | "-c" => {
+                combine = true;
+                i += 1;
+            }
+            "--title" | "-t" => {
+                if i + 1 < args.len() {
+                    title = Some(args[i + 1].clone());
+                    i += 2;
+                } else {
+                    return Err("--title requires a value".into());
+                }
+            }
+            "--host" | "-h" => {
+                if i + 1 < args.len() {
+                    host = Some(args[i + 1].clone());
+                    i += 2;
+                } else {
+                    return Err("--host requires a value".into());
+                }
+            }
+            "--help" => {
+                print_usage();
+                return Ok(());
+            }
+            _ => {
+                return Err(format!("Unknown argument: {}", args[i]).into());
+            }
+        }
+    }
+    
+    let input_path = input.ok_or("--input is required")?;
+    
+    // Expand glob pattern if needed
+    let input_files = expand_inputs(&input_path)?;
+    
+    if input_files.is_empty() {
+        return Err(format!("No files found matching: {}", input_path).into());
+    }
+    
+    log_step(&format!("Found {} JSONL file(s) to process", input_files.len()));
+    
+    if combine || input_files.len() > 1 {
+        // Combined report mode
+        log_step("Generating combined HTML report...");
+        let combined_data = html_report::parse_multiple_jsonl_files(&input_files)?;
+        
+        let output_path = output.unwrap_or_else(|| "combined_report.html".to_string());
+        let version = combined_data.sources.first()
+            .and_then(|s| s.version.as_ref())
+            .map(|v| v.clone())
+            .unwrap_or_else(|| VERSION.to_string());
+        
+        html_report::render_combined_html(&combined_data, &version, &output_path)?;
+        log_success(&format!("Combined HTML report written to: {}", output_path));
+    } else {
+        // Single file mode
+        log_step("Generating HTML report...");
+        let output_path = html_report::generate_single_report(
+            &input_files[0],
+            output.as_deref(),
+            title.as_deref(),
+            host.as_deref(),
+        )?;
+        log_success(&format!("HTML report written to: {}", output_path));
+    }
+    
+    Ok(())
+}
+
+fn expand_inputs(pattern: &str) -> Result<Vec<String>, Box<dyn std::error::Error>> {
+    let mut files = Vec::new();
+    
+    // Check if pattern contains glob characters
+    if pattern.contains('*') || pattern.contains('?') || pattern.contains('[') {
+        // Use glob pattern matching
+        let matches = glob(pattern)?;
+        for entry in matches {
+            match entry {
+                Ok(path) => {
+                    if path.is_file() && path.extension().and_then(|s| s.to_str()) == Some("jsonl") {
+                        files.push(path.to_string_lossy().to_string());
+                    }
+                }
+                Err(e) => {
+                    log_warn(&format!("Error matching glob pattern: {}", e));
+                }
+            }
+        }
+    } else {
+        // Single file path
+        let path = Path::new(pattern);
+        if !path.exists() {
+            return Err(format!("File not found: {}", pattern).into());
+        }
+        if !path.is_file() {
+            return Err(format!("Path is not a file: {}", pattern).into());
+        }
+        files.push(pattern.to_string());
+    }
+    
+    // Sort for consistent ordering
+    files.sort();
+    
+    Ok(files)
 }

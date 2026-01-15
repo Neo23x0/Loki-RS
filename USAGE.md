@@ -128,6 +128,62 @@ Example `config/excludes.cfg`:
 .*/tmp/.*
 ```
 
+## Generating HTML Reports from JSONL Files
+
+The `loki-util` tool can generate HTML reports from existing JSONL log files, either individually or by combining multiple scans:
+
+### Single JSONL File
+
+Generate an HTML report from a single JSONL file:
+
+```bash
+./loki-util html --input loki_hostname_2026-01-12.jsonl --output report.html
+```
+
+If you omit `--output`, the report will be created with the same name as the input file but with a `.html` extension.
+
+### Combined Reports from Multiple Files
+
+Combine multiple JSONL files into a single HTML report, useful for aggregating results from multiple hosts or scan sessions:
+
+```bash
+# Using glob patterns
+./loki-util html --input "*.jsonl" --combine --output combined_report.html
+
+# Specify multiple files explicitly (if glob doesn't work)
+./loki-util html --input scan1.jsonl --input scan2.jsonl --combine --output combined.html
+```
+
+The combined report includes:
+- A summary table showing findings per host
+- Per-host grouping of findings
+- Total counts by severity across all hosts
+
+### Options
+
+- `--input <file|glob>` - Input JSONL file or glob pattern (required)
+- `--output <file.html>` - Output HTML file (optional)
+- `--combine` - Enable combined report mode for multiple inputs
+- `--title <str>` - Override the report title
+- `--host <str>` - Override the hostname displayed in the report
+
+### Example Use Cases
+
+1. **Regenerate a report after a scan:**
+   ```bash
+   ./loki-util html --input loki_myhost_2026-01-12.jsonl
+   ```
+
+2. **Combine scans from multiple hosts:**
+   ```bash
+   ./loki-util html --input "loki_*.jsonl" --combine --output all_hosts_report.html
+   ```
+
+3. **Create a custom-titled report:**
+   ```bash
+   ./loki-util html --input scan.jsonl --title "Security Audit - Q1 2026" --output audit.html
+   ```
+
 ## Output Levels
 
 Loki-RS uses a scoring system to determine the severity of matches:
@@ -161,6 +217,7 @@ Loki-RS supports multiple log levels:
 ### Process scanning fails
 - Process memory scanning requires appropriate permissions
 - Some processes may be protected
+- On macOS, most processes deny memory access unless debugging entitlements or elevated privileges are present
 - Use `-n` to skip process scanning if needed
 
 ## Building from Source

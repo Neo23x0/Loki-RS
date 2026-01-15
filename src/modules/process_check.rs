@@ -13,6 +13,28 @@ use std::io::{Read, Seek, SeekFrom};
 #[cfg(target_os = "linux")]
 use std::fs;
 
+// macOS Mach memory access
+#[cfg(target_os = "macos")]
+use mach2::kern_return::KERN_SUCCESS;
+#[cfg(target_os = "macos")]
+use mach2::mach_port::mach_port_deallocate;
+#[cfg(target_os = "macos")]
+use mach2::message::mach_msg_type_number_t;
+#[cfg(target_os = "macos")]
+use mach2::port::mach_port_t;
+#[cfg(target_os = "macos")]
+use mach2::traps::{mach_task_self, task_for_pid};
+#[cfg(target_os = "macos")]
+use mach2::vm::{mach_vm_read_overwrite, mach_vm_region};
+#[cfg(target_os = "macos")]
+use mach2::vm_prot::VM_PROT_READ;
+#[cfg(target_os = "macos")]
+use mach2::vm_region::{vm_region_basic_info_64, VM_REGION_BASIC_INFO_64};
+#[cfg(target_os = "macos")]
+use mach2::vm_types::{mach_vm_address_t, mach_vm_size_t};
+#[cfg(target_os = "macos")]
+use std::sync::atomic::{AtomicBool, Ordering};
+
 // Hashing imports
 use md5;
 use sha1::Sha1;
@@ -38,6 +60,20 @@ use crate::helpers::throttler::{init_thread_throttler, throttle_start, throttle_
 use crate::helpers::interrupt::ScanState;
 
 use crate::modules::{ScanModule, ScanContext, ModuleResult};
+
+#[cfg(target_os = "macos")]
+static MACOS_MEM_SCAN_WARNING_LOGGED: AtomicBool = AtomicBool::new(false);
+
+#[cfg(target_os = "macos")]
+#[derive(Clone, Copy, Debug)]
+struct MacosMemStats {
+    task_for_pid_kr: i32,
+    regions_total: u64,
+    regions_readable: u64,
+    read_attempts: u64,
+    bytes_read: u64,
+    duration_ms: u128,
+}
 
 pub struct ProcessCheckModule;
 
@@ -72,7 +108,7 @@ pub fn scan_processes(
     
     // Warn if platform is not fully supported for memory scanning
     if cfg!(target_os = "macos") {
-        logger.warning("Process memory scanning is not supported on macOS due to system protections.");
+        logger.warning("macOS process memory scanning is best-effort and typically requires debugging entitlements or elevated privileges. Most processes will not allow access.");
     }
 
     let cpu_limit = scan_config.cpu_limit;
@@ -363,7 +399,65 @@ fn process_single_process(
     scanner.set_timeout(std::time::Duration::from_secs(30));
     
     // Read process memory
+    #[cfg(target_os = "macos")]
+    let (mem_data, mem_stats) = read_process_memory(pid_u32);
+    #[cfg(target_os = "macos")]
+    {
+        let task_status = if mem_stats.task_for_pid_kr == KERN_SUCCESS {
+            "ok"
+        } else {
+            "denied"
+        };
+        if mem_stats.task_for_pid_kr != KERN_SUCCESS {
+            logger.info(&format!(
+                "macOS process memory access denied pid={} proc={} kern_return={}",
+                pid_u32,
+                proc_name_str,
+                mem_stats.task_for_pid_kr
+            ));
+        }
+        logger.debug(&format!(
+            "macOS memory scan pid={} proc={} bytes={} task_for_pid={} kern_return={} regions={} readable_regions={} read_attempts={} duration_ms={}",
+            pid_u32,
+            proc_name_str,
+            mem_data.len(),
+            task_status,
+            mem_stats.task_for_pid_kr,
+            mem_stats.regions_total,
+            mem_stats.regions_readable,
+            mem_stats.read_attempts,
+            mem_stats.duration_ms
+        ));
+    }
+
+    #[cfg(not(target_os = "macos"))]
     let mem_data = read_process_memory(pid_u32);
+
+    #[cfg(target_os = "macos")]
+    let yara_status = if mem_stats.task_for_pid_kr != KERN_SUCCESS {
+        "denied"
+    } else if mem_data.is_empty() {
+        "skipped"
+    } else {
+        "scanned"
+    };
+    #[cfg(not(target_os = "macos"))]
+    let yara_status = if mem_data.is_empty() { "skipped" } else { "scanned" };
+
+    logger.info(&format!(
+        "Process YARA scan result PID={} PROC_NAME={} RESULT={}",
+        pid_u32, proc_name_str, yara_status
+    ));
+
+    #[cfg(target_os = "macos")]
+    if mem_data.is_empty() {
+        let already_logged = MACOS_MEM_SCAN_WARNING_LOGGED
+            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+            .is_ok();
+        if already_logged {
+            logger.warning("macOS process memory access denied or unavailable for at least one process. Continuing with non-memory checks.");
+        }
+    }
 
     if !mem_data.is_empty() {
         if let Ok(scan_results) = scanner.scan(&mem_data) {
@@ -474,22 +568,22 @@ fn process_single_process(
         processes_matched += 1;
         
         let sub_scores: Vec<i16> = proc_matches.iter().map(|m| m.score).collect();
-        let total_score = calculate_weighted_score(&sub_scores);
+        let total_score = calculate_weighted_score(&sub_scores).round() as i16;
         
-        let log_level = if total_score >= scan_config.alert_threshold as f64 {
+        let log_level = if total_score as f64 >= scan_config.alert_threshold as f64 {
             alert_count += 1;
             if let Some(state) = scan_state { state.add_alerts(1); }
             LogLevel::Alert
-        } else if total_score >= scan_config.warning_threshold as f64 {
+        } else if total_score as f64 >= scan_config.warning_threshold as f64 {
             warning_count += 1;
             if let Some(state) = scan_state { state.add_warnings(1); }
             LogLevel::Warning
-        } else if total_score >= scan_config.notice_threshold as f64 {
+        } else if total_score as f64 >= scan_config.notice_threshold as f64 {
             notice_count += 1;
             if let Some(state) = scan_state { state.add_notices(1); }
             LogLevel::Notice
         } else {
-            logger.debug(&format!("Process match below notice threshold PID: {} SCORE: {:.2}", pid_u32, total_score));
+            logger.debug(&format!("Process match below notice threshold PID: {} SCORE: {}", pid_u32, total_score));
             return (processes_scanned, 0, 0, 0, 0);
         };
         
@@ -510,7 +604,7 @@ fn process_single_process(
             log_level,
             pid_u32,
             &proc_name_str,
-            total_score,
+            total_score as f64,
             shown_reasons,
             // Extended metadata
             (md5_hash, sha1_hash, sha256_hash),
@@ -573,7 +667,7 @@ fn get_process_network_info(pid: u32) -> (Vec<(String, u16)>, Vec<u16>) {
 #[cfg(target_os = "windows")]
 fn read_process_memory(pid: u32) -> Vec<u8> {
     let mut buffer = Vec::new();
-    let max_buffer_size = 100 * 1024 * 1024; // 100 MB limit
+    let max_buffer_size = 400 * 1024 * 1024; // 400 MB limit
     
     unsafe {
         let handle = OpenProcess(
@@ -641,7 +735,7 @@ fn read_process_memory(pid: u32) -> Vec<u8> {
 #[cfg(target_os = "linux")]
 fn read_process_memory(pid: u32) -> Vec<u8> {
     let mut buffer = Vec::new();
-    let max_buffer_size = 100 * 1024 * 1024; // 100 MB limit
+    let max_buffer_size = 400 * 1024 * 1024; // 400 MB limit
     
     // Parse /proc/{pid}/maps to find readable regions
     let maps_path = format!("/proc/{}/maps", pid);
@@ -707,7 +801,104 @@ fn read_process_memory(pid: u32) -> Vec<u8> {
     buffer
 }
 
-#[cfg(not(any(target_os = "windows", target_os = "linux")))]
+#[cfg(target_os = "macos")]
+fn read_process_memory(pid: u32) -> (Vec<u8>, MacosMemStats) {
+    let mut buffer = Vec::new();
+    let max_buffer_size = 400 * 1024 * 1024; // 400 MB limit
+    let start = std::time::Instant::now();
+
+    let mut stats = MacosMemStats {
+        task_for_pid_kr: 0,
+        regions_total: 0,
+        regions_readable: 0,
+        read_attempts: 0,
+        bytes_read: 0,
+        duration_ms: 0,
+    };
+
+    unsafe {
+        let mut task: mach_port_t = 0;
+        let kr = task_for_pid(mach_task_self(), pid as i32, &mut task);
+        stats.task_for_pid_kr = kr;
+        if kr != KERN_SUCCESS {
+            stats.duration_ms = start.elapsed().as_millis();
+            return (buffer, stats);
+        }
+
+        let mut address: mach_vm_address_t = 0;
+        loop {
+            if buffer.len() >= max_buffer_size {
+                break;
+            }
+
+            let mut size: mach_vm_size_t = 0;
+            let mut info: vm_region_basic_info_64 = std::mem::zeroed();
+            let mut info_count: mach_msg_type_number_t =
+                (std::mem::size_of::<vm_region_basic_info_64>() / std::mem::size_of::<u32>())
+                    as mach_msg_type_number_t;
+            let mut object_name: mach_port_t = 0;
+
+            let kr = mach_vm_region(
+                task,
+                &mut address,
+                &mut size,
+                VM_REGION_BASIC_INFO_64,
+                (&mut info as *mut vm_region_basic_info_64) as *mut _,
+                &mut info_count,
+                &mut object_name,
+            );
+
+            stats.regions_total += 1;
+            if kr != KERN_SUCCESS {
+                break;
+            }
+
+            let readable = (info.protection & VM_PROT_READ) != 0;
+            if readable && size > 0 {
+                stats.regions_readable += 1;
+                let remaining = max_buffer_size - buffer.len();
+                let read_size = std::cmp::min(size as usize, remaining);
+                if read_size == 0 {
+                    break;
+                }
+
+                let mut chunk = vec![0u8; read_size];
+                let mut out_size: mach_vm_size_t = 0;
+
+                let kr = mach_vm_read_overwrite(
+                    task,
+                    address,
+                    read_size as mach_vm_size_t,
+                    chunk.as_mut_ptr() as mach_vm_address_t,
+                    &mut out_size,
+                );
+
+                if kr == KERN_SUCCESS && out_size > 0 {
+                    chunk.truncate(out_size as usize);
+                    buffer.extend_from_slice(&chunk);
+                    stats.bytes_read += out_size as u64;
+                }
+                stats.read_attempts += 1;
+            }
+
+            if object_name != 0 {
+                let _ = mach_port_deallocate(mach_task_self(), object_name);
+            }
+
+            if size == 0 {
+                break;
+            }
+            address = address.saturating_add(size);
+        }
+
+        let _ = mach_port_deallocate(mach_task_self(), task);
+    }
+
+    stats.duration_ms = start.elapsed().as_millis();
+    (buffer, stats)
+}
+
+#[cfg(not(any(target_os = "windows", target_os = "linux", target_os = "macos")))]
 fn read_process_memory(_pid: u32) -> Vec<u8> {
     Vec::new()
 }

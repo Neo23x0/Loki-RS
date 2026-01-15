@@ -22,3 +22,4 @@ dist/
 tmp/
 build/
 config/excludes.cfg
+loki-logs/*

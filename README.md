@@ -20,6 +20,10 @@ A rewrite of [Loki](https://github.com/Neo23x0/Loki) in Rust. High-performance, 
 - Magic header detection
 - JSONL output for log ingestion
 
+## macOS process scanning
+
+Process memory scanning on macOS is best-effort and typically requires debugging entitlements or elevated privileges. Without those, Loki-RS will still scan files but will not be able to read most process memory. Use `--no-procs` to skip process scanning if needed.
+
 ## Installation
 
 Download the pre-compiled binary for your platform from the [Releases Page](https://github.com/Neo23x0/Loki-RS/releases).
@@ -161,6 +165,30 @@ The report includes:
 ![Loki HTML Report](./images/loki-html-report.png)
 
 The HTML report shares the same base filename as the JSONL output (e.g., `loki_hostname_2025-01-08.html`). To disable report generation, use `--no-html`.
+
+### Generating HTML Reports from JSONL Files
+
+You can generate HTML reports from existing JSONL files using `loki-util`:
+
+```bash
+# Generate HTML report from a single JSONL file
+./loki-util html --input scan_results.jsonl --output report.html
+
+# Generate combined HTML report from multiple JSONL files
+./loki-util html --input "*.jsonl" --combine --output combined_report.html
+
+# Use glob patterns to match multiple files
+./loki-util html --input "/path/to/scans/*.jsonl" --combine --output combined.html
+```
+
+**Options:**
+- `--input <file|glob>` - Input JSONL file or glob pattern (required)
+- `--output <file.html>` - Output HTML file (optional, defaults to input filename with .html extension)
+- `--combine` - Combine multiple JSONL files into one report (groups findings by hostname)
+- `--title <str>` - Override report title
+- `--host <str>` - Override hostname in report
+
+The combined report mode is useful for aggregating scan results from multiple hosts or time periods into a single view, with findings grouped by source hostname.
 
 ## Building from Source
 

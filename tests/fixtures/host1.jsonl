@@ -1,0 +1,4 @@
+{"timestamp":"2026-01-12T08:59:01.688179+00:00","level":"INFO","event_type":"scan_start","hostname":"host1.example.com","message":"Loki-RS scan started VERSION: 2.7.0"}
+{"timestamp":"2026-01-12T08:59:05.123456+00:00","level":"ALERT","event_type":"file_match","hostname":"host1.example.com","message":"File Match","file_path":"/tmp/malware1.exe","score":90.0,"file_type":"Executable","file_size":1024,"md5":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}
+{"timestamp":"2026-01-12T08:59:06.234567+00:00","level":"WARNING","event_type":"file_match","hostname":"host1.example.com","message":"File Match","file_path":"/tmp/suspicious1.dll","score":70.0,"file_type":"DLL","file_size":2048,"md5":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}
+{"timestamp":"2026-01-12T08:59:10.789012+00:00","level":"INFO","event_type":"scan_end","hostname":"host1.example.com","message":"Loki-RS scan finished. Summary - Files scanned: 2 Matched: 2 | Alerts: 1 Warnings: 1"}

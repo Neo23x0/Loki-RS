@@ -1,0 +1,5 @@
+{"timestamp":"2026-01-12T08:59:01.688179+00:00","level":"INFO","event_type":"scan_start","hostname":"test-host","message":"Loki-RS scan started VERSION: 2.7.0"}
+This is not valid JSON
+{"timestamp":"2026-01-12T08:59:05.123456+00:00","level":"ALERT","event_type":"file_match","hostname":"test-host","message":"File Match","file_path":"/tmp/test.exe","score":85.0}
+{"invalid": json, "missing": quotes}
+{"timestamp":"2026-01-12T08:59:10.789012+00:00","level":"INFO","event_type":"scan_end","hostname":"test-host","message":"Loki-RS scan finished"}

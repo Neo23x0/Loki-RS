@@ -190,7 +190,7 @@ impl LogOutput for ConsoleOutput {
                 println!("{} Match found: {}", level_str, path_or_proc.white());
                 
                 if let Some(score) = event.score {
-                    println!("      SCORE: {}", score.to_string().white());
+                    println!("      SCORE: {}", (score.round() as i16).to_string().white());
                 }
                 if let Some(reasons) = &event.reasons {
                     for (i, r) in reasons.iter().enumerate() {
@@ -377,7 +377,7 @@ impl LogOutput for PlainTextFileOutput {
                     reasons_str = r_msgs.join("; ");
                 }
                 
-                format!("Match: {} SCORE: {:.2} REASONS: [{}]", target, score, reasons_str)
+                format!("Match: {} SCORE: {} REASONS: [{}]", target, score.round() as i16, reasons_str)
             },
             _ => {
                 event.message.clone()

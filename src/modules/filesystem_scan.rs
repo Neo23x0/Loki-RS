@@ -889,22 +889,22 @@ fn scan_memory_buffer(
     if !sample_matches.is_empty() {
         matched = 1;
         let sub_scores: Vec<i16> = sample_matches.iter().map(|m| m.score).collect();
-        let total_score = calculate_weighted_score(&sub_scores);
+        let total_score = calculate_weighted_score(&sub_scores).round() as i16;
         
-        let log_level = if total_score >= scan_config.alert_threshold as f64 {
+        let log_level = if total_score as f64 >= scan_config.alert_threshold as f64 {
             alert_count += 1;
             if let Some(state) = scan_state { state.add_alerts(1); }
             LogLevel::Alert
-        } else if total_score >= scan_config.warning_threshold as f64 {
+        } else if total_score as f64 >= scan_config.warning_threshold as f64 {
             warning_count += 1;
             if let Some(state) = scan_state { state.add_warnings(1); }
             LogLevel::Warning
-        } else if total_score >= scan_config.notice_threshold as f64 {
+        } else if total_score as f64 >= scan_config.notice_threshold as f64 {
             notice_count += 1;
             if let Some(state) = scan_state { state.add_notices(1); }
             LogLevel::Notice
         } else {
-            logger.debug(&format!("Match below threshold FILE: {} SCORE: {:.2}", path_display, total_score));
+            logger.debug(&format!("Match below threshold FILE: {} SCORE: {}", path_display, total_score));
             return (scanned, 0, 0, 0, 0);
         };
         
@@ -924,7 +924,7 @@ fn scan_memory_buffer(
         logger.file_match(
             log_level,
             path_display,
-            total_score,
+            total_score as f64,
             filetype,
             content.len() as u64,
             &md5_value,

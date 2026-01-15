@@ -12,8 +12,8 @@ use chrono::{DateTime, Utc};
 use crate::ScanConfig;
 
 /// Represents a log event from the JSONL file (subset of fields we need)
-#[derive(Debug, Deserialize, Serialize)]
-struct LogEvent {
+#[derive(Debug, Deserialize, Serialize, Clone)]
+pub struct LogEvent {
     timestamp: DateTime<Utc>,
     level: String,
     event_type: String,
@@ -45,7 +45,7 @@ struct LogEvent {
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
-struct MatchReason {
+pub struct MatchReason {
     message: String,
     score: i16,
     description: Option<String>,
@@ -55,7 +55,7 @@ struct MatchReason {
 }
 
 /// Parsed report data
-struct ReportData {
+pub struct ReportData {
     scan_start: Option<LogEvent>,
     scan_end: Option<LogEvent>,
     info_events: Vec<LogEvent>,
@@ -83,7 +83,7 @@ pub fn generate_report(jsonl_path: &str, scan_config: &ScanConfig, version: &str
     Ok(html_path)
 }
 
-fn parse_jsonl(path: &str) -> Result<ReportData, String> {
+pub fn parse_jsonl(path: &str) -> Result<ReportData, String> {
     let file = File::open(path)
         .map_err(|e| format!("Failed to open JSONL file: {}", e))?;
     let reader = BufReader::new(file);
@@ -128,7 +128,7 @@ fn parse_jsonl(path: &str) -> Result<ReportData, String> {
     })
 }
 
-fn render_html(data: &ReportData, scan_config: &ScanConfig, version: &str, jsonl_path: &str) -> String {
+pub fn render_html(data: &ReportData, scan_config: &ScanConfig, version: &str, jsonl_path: &str) -> String {
     let hostname = data.scan_start.as_ref()
         .map(|e| e.hostname.clone())
         .unwrap_or_else(|| "Unknown".to_string());
@@ -1741,7 +1741,7 @@ fn render_finding_card(finding: &LogEvent, idx: usize) -> String {
         _ => "notice",
     };
     
-    let score = finding.score.unwrap_or(0.0);
+    let score = finding.score.unwrap_or(0.0).round() as i16;
     
     let path_or_name = finding.file_path.as_deref()
         .or(finding.process_name.as_deref())
@@ -1927,7 +1927,7 @@ fn render_finding_card(finding: &LogEvent, idx: usize) -> String {
         r#"<div class="finding-card" data-level="{level_class}" id="finding-{idx}">
             <div class="finding-header">
                 <span class="severity-badge {level_class}">{level}</span>
-                <span class="score">{score:.1}</span>
+                <span class="score">{score}</span>
                 <span class="finding-path">{path}<button class="filter-btn-inline" onclick="filterValue('{path_js}', event)" title="Filter out this path">✖</button></span>
                 <span class="finding-type">{finding_type}</span>
             </div>

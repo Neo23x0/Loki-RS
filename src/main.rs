@@ -1217,9 +1217,15 @@ fn main() {
             if get_os_type() == "windows" { default = "C:\\".to_string(); }
             vec![default]
         } else {
-            logger.info(&format!("Found {} drive(s)/mount(s) to scan: {}", 
-                enumerated.len(), 
-                enumerated.join(", ")));
+            if scan_config.scan_hard_drives {
+                logger.info(&format!("Detected {} hard drive(s): {}", 
+                    enumerated.len(), 
+                    enumerated.join(", ")));
+            } else {
+                logger.info(&format!("Found {} drive(s)/mount(s) to scan: {}", 
+                    enumerated.len(), 
+                    enumerated.join(", ")));
+            }
             enumerated
         }
     } else {
@@ -1232,10 +1238,14 @@ fn main() {
         vec![single_folder]
     };
     
-    // For TUI, use first target folder (or default)
-    let target_folder = target_folders.first().cloned().unwrap_or_else(|| {
-        if get_os_type() == "windows" { "C:\\".to_string() } else { "/".to_string() }
-    });
+    // For TUI, use "All Drives" when scanning hard drives, otherwise use first target folder (or default)
+    let target_folder = if scan_config.scan_hard_drives {
+        "All Drives".to_string()
+    } else {
+        target_folders.first().cloned().unwrap_or_else(|| {
+            if get_os_type() == "windows" { "C:\\".to_string() } else { "/".to_string() }
+        })
+    };
     
     // Print scan configuration limits
     logger.info_w("Scan limits", &[

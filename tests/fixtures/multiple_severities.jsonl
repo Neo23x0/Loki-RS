@@ -1,0 +1,5 @@
+{"timestamp":"2026-01-12T08:59:01.688179+00:00","level":"INFO","event_type":"scan_start","hostname":"test-host","message":"Loki-RS scan started VERSION: 2.7.0"}
+{"timestamp":"2026-01-12T08:59:05.123456+00:00","level":"ALERT","event_type":"file_match","hostname":"test-host","message":"File Match","file_path":"/tmp/alert.exe","score":90.0,"file_type":"Executable","file_size":2048,"md5":"11111111111111111111111111111111"}
+{"timestamp":"2026-01-12T08:59:06.234567+00:00","level":"WARNING","event_type":"file_match","hostname":"test-host","message":"File Match","file_path":"/tmp/warning.dll","score":65.0,"file_type":"DLL","file_size":4096,"md5":"22222222222222222222222222222222"}
+{"timestamp":"2026-01-12T08:59:07.345678+00:00","level":"NOTICE","event_type":"file_match","hostname":"test-host","message":"File Match","file_path":"/tmp/notice.bat","score":45.0,"file_type":"Batch","file_size":512,"md5":"33333333333333333333333333333333"}
+{"timestamp":"2026-01-12T08:59:10.789012+00:00","level":"INFO","event_type":"scan_end","hostname":"test-host","message":"Loki-RS scan finished. Summary - Files scanned: 3 Matched: 3 | Alerts: 1 Warnings: 1 Notices: 1"}
