@@ -103,6 +103,43 @@ pub fn get_os_type() -> String {
     env::consts::OS.to_string()
 }
 
+#[cfg(unix)]
+pub fn is_elevated() -> bool {
+    unsafe { libc::geteuid() == 0 }
+}
+
+#[cfg(windows)]
+pub fn is_elevated() -> bool {
+    use windows::Win32::Foundation::{CloseHandle, HANDLE};
+    use windows::Win32::Security::{GetTokenInformation, OpenProcessToken, TokenElevation, TOKEN_ELEVATION, TOKEN_QUERY};
+    use windows::Win32::System::Threading::GetCurrentProcess;
+
+    unsafe {
+        let mut token_handle = HANDLE::default();
+        if OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token_handle).is_err() {
+            return false;
+        }
+
+        let mut elevation = TOKEN_ELEVATION::default();
+        let mut return_len = 0u32;
+        let result = GetTokenInformation(
+            token_handle,
+            TokenElevation,
+            Some(&mut elevation as *mut _ as *mut _),
+            std::mem::size_of::<TOKEN_ELEVATION>() as u32,
+            &mut return_len,
+        );
+        let _ = CloseHandle(token_handle);
+
+        result.as_bool() && elevation.TokenIsElevated != 0
+    }
+}
+
+#[cfg(not(any(unix, windows)))]
+pub fn is_elevated() -> bool {
+    false
+}
+
 #[allow(dead_code)]
 pub fn parse_size_string(size_str: &str) -> Result<usize, String> {
     let s = size_str.trim().to_uppercase();

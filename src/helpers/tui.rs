@@ -128,6 +128,7 @@ struct SettingsDisplay {
     scan_all_types: bool,
     scan_hard_drives: bool,
     scan_all_drives: bool,
+    is_elevated: bool,
     exclusion_count: usize,
     yara_rules_count: usize,
     ioc_count: usize,
@@ -151,6 +152,7 @@ impl SettingsDisplay {
             scan_all_types: config.scan_all_types,
             scan_hard_drives: config.scan_hard_drives,
             scan_all_drives: config.scan_all_drives,
+            is_elevated: config.is_elevated,
             exclusion_count: config.exclusion_count,
             yara_rules_count: config.yara_rules_count,
             ioc_count: config.ioc_count,
@@ -487,6 +489,13 @@ fn render_settings_panel(frame: &mut Frame, app: &TuiApp, area: Rect) {
         ]),
         Line::from(vec![
             Span::styled(format!(" {}", target), Style::default().fg(Color::White)),
+        ]),
+        Line::from(vec![
+            Span::styled(" Elevated: ", Style::default().fg(Color::Cyan)),
+            Span::styled(
+                if app.settings.is_elevated { "Yes" } else { "No" },
+                Style::default().fg(if app.settings.is_elevated { Color::Green } else { Color::Yellow }),
+            ),
         ]),
         Line::from(""),
         Line::from(vec![

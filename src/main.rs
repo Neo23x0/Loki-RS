@@ -148,7 +148,7 @@ struct Cli {
     no_tui: bool,
 }
 
-use crate::helpers::helpers::{get_hostname, get_os_type, evaluate_env};
+use crate::helpers::helpers::{get_hostname, get_os_type, evaluate_env, is_elevated};
 use crate::helpers::html_report;
 use crate::helpers::unified_logger::{UnifiedLogger, LoggerConfig, RemoteConfig, RemoteProtocol, RemoteFormat, LogLevel, TuiMessage};
 use crate::helpers::interrupt::ScanState;
@@ -192,6 +192,7 @@ pub struct ScanConfig {
     pub scan_hard_drives: bool,
     pub scan_all_drives: bool,
     pub scan_archives: bool,
+    pub is_elevated: bool,
     pub alert_threshold: i16,
     pub warning_threshold: i16,
     pub notice_threshold: i16,
@@ -1146,6 +1147,15 @@ fn main() {
 
     logger.scan_start(VERSION);
 
+    let elevated = is_elevated();
+    if !elevated {
+        let elevate_hint = if cfg!(windows) { "as Administrator" } else { "as root" };
+        logger.warning(&format!(
+            "Scan is not running with elevated privileges. Please run {}.",
+            elevate_hint
+        ));
+    }
+
     // Configure thread pool
     match ThreadPoolBuilder::new().num_threads(num_threads).build_global() {
         Ok(_) => logger.info(&format!("Initialized thread pool with {} threads", num_threads)),
@@ -1195,6 +1205,7 @@ fn main() {
         scan_hard_drives: args.scan_hard_drives,
         scan_all_drives: args.scan_all_drives,
         scan_archives: !args.no_archive,
+        is_elevated: elevated,
         alert_threshold: args.alert_level,
         warning_threshold: args.warning_level,
         notice_threshold: args.notice_level,
@@ -1902,6 +1913,7 @@ mod tests {
                 scan_hard_drives: false,
                 scan_all_drives: false,
                 scan_archives: true,
+                is_elevated: false,
                 alert_threshold: 80,
                 warning_threshold: 60,
                 notice_threshold: 40,
@@ -1930,6 +1942,7 @@ mod tests {
                 scan_hard_drives: false,
                 scan_all_drives: false,
                 scan_archives: true,
+                is_elevated: false,
                 alert_threshold: 80,
                 warning_threshold: 60,
                 notice_threshold: 40,
@@ -1978,6 +1991,7 @@ mod tests {
                 score: 75,
                 description: None,
                 author: None,
+                reference: None,
                 matched_strings: None,
             };
 
@@ -1988,9 +2002,9 @@ mod tests {
         #[test]
         fn test_gen_match_sorting() {
             let mut matches = vec![
-                GenMatch { message: "Low".to_string(), score: 40, description: None, author: None, matched_strings: None },
-                GenMatch { message: "High".to_string(), score: 90, description: None, author: None, matched_strings: None },
-                GenMatch { message: "Medium".to_string(), score: 60, description: None, author: None, matched_strings: None },
+                GenMatch { message: "Low".to_string(), score: 40, description: None, author: None, reference: None, matched_strings: None },
+                GenMatch { message: "High".to_string(), score: 90, description: None, author: None, reference: None, matched_strings: None },
+                GenMatch { message: "Medium".to_string(), score: 60, description: None, author: None, reference: None, matched_strings: None },
             ];
 
             matches.sort_by(|a, b| b.score.cmp(&a.score));
@@ -2011,6 +2025,7 @@ mod tests {
                 score: 80,
                 description: "A test rule".to_string(),
                 author: "Test Author".to_string(),
+                reference: String::new(),
                 matched_strings: vec!["$s1: 'test' @ 0".to_string()],
             };
 
@@ -2026,6 +2041,7 @@ mod tests {
                 score: 75,
                 description: String::new(),
                 author: String::new(),
+                reference: String::new(),
                 matched_strings: Vec::new(),
             };
 
