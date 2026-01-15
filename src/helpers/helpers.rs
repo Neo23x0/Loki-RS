@@ -111,8 +111,8 @@ pub fn is_elevated() -> bool {
 #[cfg(windows)]
 pub fn is_elevated() -> bool {
     use windows::Win32::Foundation::{CloseHandle, HANDLE};
-    use windows::Win32::Security::{GetTokenInformation, OpenProcessToken, TokenElevation, TOKEN_ELEVATION, TOKEN_QUERY};
-    use windows::Win32::System::Threading::GetCurrentProcess;
+    use windows::Win32::Security::{GetTokenInformation, TokenElevation, TOKEN_ELEVATION, TOKEN_QUERY};
+    use windows::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
 
     unsafe {
         let mut token_handle = HANDLE::default();
@@ -131,7 +131,7 @@ pub fn is_elevated() -> bool {
         );
         let _ = CloseHandle(token_handle);
 
-        result.as_bool() && elevation.TokenIsElevated != 0
+        result.is_ok() && elevation.TokenIsElevated != 0
     }
 }
 
