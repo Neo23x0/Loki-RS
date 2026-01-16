@@ -262,7 +262,11 @@ fn process_single_process(
 
     // Log detailed process info at INFO level using structured context
     // Console output will apply colors; JSONL/PlainText will be clean
-    let cmd_display = if cmd_line.len() > 100 { format!("{}...", &cmd_line[..97]) } else { cmd_line.clone() };
+    let cmd_display = if cmd_line.chars().count() > 100 {
+        format!("{}...", cmd_line.chars().take(97).collect::<String>())
+    } else {
+        cmd_line.clone()
+    };
     let mem_display = format!("{:.2} MB", memory_bytes as f64 / 1024.0 / 1024.0);
     let cpu_display = format!("{:.2}%", cpu_usage);
     let start_display = start_time.map(|t| t.to_string()).unwrap_or_else(|| "?".to_string());

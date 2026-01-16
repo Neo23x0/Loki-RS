@@ -160,13 +160,17 @@ impl SettingsDisplay {
     }
     
     fn truncate_path(&self, max_len: usize) -> String {
-        if self.target_folder.len() <= max_len {
+        let char_count = self.target_folder.chars().count();
+        if char_count <= max_len {
             self.target_folder.clone()
         } else {
-            let keep = (max_len - 3) / 2;
-            format!("{}...{}", 
-                &self.target_folder[..keep],
-                &self.target_folder[self.target_folder.len() - keep..])
+            let keep = (max_len.saturating_sub(3)) / 2;
+            if keep == 0 {
+                return "...".to_string();
+            }
+            let start: String = self.target_folder.chars().take(keep).collect();
+            let end: String = self.target_folder.chars().skip(char_count - keep).collect();
+            format!("{}...{}", start, end)
         }
     }
 }
@@ -869,16 +873,19 @@ fn render_threads_overlay(frame: &mut Frame, app: &TuiApp, area: Rect) {
     frame.render_widget(list, inner);
 }
 
-/// Truncate path from the middle for display
+/// Truncate path from the middle for display (UTF-8 safe)
 fn truncate_path(path: &str, max_len: usize) -> String {
-    if path.len() <= max_len {
+    let char_count = path.chars().count();
+    if char_count <= max_len {
         path.to_string()
     } else {
         let keep = (max_len.saturating_sub(3)) / 2;
         if keep == 0 {
             "...".to_string()
         } else {
-            format!("{}...{}", &path[..keep], &path[path.len().saturating_sub(keep)..])
+            let start: String = path.chars().take(keep).collect();
+            let end: String = path.chars().skip(char_count - keep).collect();
+            format!("{}...{}", start, end)
         }
     }
 }
@@ -917,41 +924,50 @@ pub fn run_tui(
     // Create app state
     let mut app = TuiApp::new(config, target_folder, scan_state.clone(), receiver, start_loading);
     
-    // Main loop
-    let result = run_main_loop(&mut terminal, &mut app);
+    // Main loop - returns (user_quit, scan_was_complete)
+    let (user_quit, scan_complete) = run_main_loop(&mut terminal, &mut app);
     
     // Restore terminal
     disable_raw_mode()?;
     execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
     terminal.show_cursor()?;
     
-    result
+    // If user quit while scan was still running, force exit the whole process
+    // This ensures background scan threads are terminated
+    if user_quit && !scan_complete {
+        std::process::exit(130); // 130 = 128 + SIGINT (2)
+    }
+    
+    Ok(())
 }
 
+/// Returns (user_quit, scan_was_complete)
+/// - user_quit: true if user explicitly pressed q+Y, false otherwise
+/// - scan_was_complete: true if scan had finished before exit
 fn run_main_loop(
     terminal: &mut Terminal<CrosstermBackend<Stdout>>,
     app: &mut TuiApp,
-) -> io::Result<()> {
+) -> (bool, bool) {
     loop {
         // Process any pending messages
         app.process_messages();
         
         // Draw UI
-        terminal.draw(|f| render_ui(f, app))?;
+        if terminal.draw(|f| render_ui(f, app)).is_err() {
+            return (false, app.scan_complete); // Terminal error
+        }
         
         // Poll for events with timeout
-        if event::poll(Duration::from_millis(50))? {
-            if let Event::Key(key) = event::read()? {
+        if let Ok(true) = event::poll(Duration::from_millis(50)) {
+            if let Ok(Event::Key(key)) = event::read() {
                 // Only handle Press events (Windows sends both Press and Release)
                 if key.kind == KeyEventKind::Press {
                     if app.handle_key(key.code, key.modifiers) {
-                        break; // User confirmed quit via 'q' or Ctrl+C -> Y
+                        return (true, app.scan_complete); // User confirmed quit
                     }
                 }
             }
         }
     }
-    
-    Ok(())
 }
 

@@ -175,13 +175,17 @@ impl ScanState {
     }
 
     fn truncate_middle(s: &str, max_len: usize) -> String {
-        if s.len() <= max_len {
+        let char_count = s.chars().count();
+        if char_count <= max_len {
             return s.to_string();
         }
         
-        let keep_len = (max_len - 3) / 2;
-        let start = &s[..keep_len];
-        let end = &s[s.len() - keep_len..];
+        let keep_len = (max_len.saturating_sub(3)) / 2;
+        if keep_len == 0 {
+            return "...".to_string();
+        }
+        let start: String = s.chars().take(keep_len).collect();
+        let end: String = s.chars().skip(char_count - keep_len).collect();
         
         format!("{}...{}", start, end)
     }

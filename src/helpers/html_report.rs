@@ -1985,10 +1985,11 @@ fn format_size(bytes: usize) -> String {
 }
 
 fn truncate_string(s: &str, max_len: usize) -> String {
-    if s.len() <= max_len {
+    let char_count = s.chars().count();
+    if char_count <= max_len {
         s.to_string()
     } else {
-        format!("{}...", &s[..max_len])
+        format!("{}...", s.chars().take(max_len).collect::<String>())
     }
 }
 
