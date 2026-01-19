@@ -119,6 +119,7 @@ const LINUX_PATH_SKIPS_START: &'static [&'static str] = &[
     "/dev",
     "/sys/kernel/debug",
     "/sys/kernel/slab",
+    "/sys/kernel/tracing",
     "/sys/devices",
     "/usr/src/linux",
 ];
@@ -1138,6 +1139,11 @@ mod tests {
         #[test]
         fn test_linux_path_skips_sys_kernel_debug() {
             assert!(LINUX_PATH_SKIPS_START.contains(&"/sys/kernel/debug"));
+        }
+
+        #[test]
+        fn test_linux_path_skips_sys_kernel_tracing() {
+            assert!(LINUX_PATH_SKIPS_START.contains(&"/sys/kernel/tracing"));
         }
 
         #[test]
