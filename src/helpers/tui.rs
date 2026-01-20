@@ -626,10 +626,12 @@ fn render_logs_panel(frame: &mut Frame, app: &mut TuiApp, area: Rect) {
                 Style::default().fg(Color::DarkGray),
             );
             
-            // Truncate message to fit
+            // Truncate message to fit (UTF-8 safe)
             let max_msg_len = (inner.width as usize).saturating_sub(18);
-            let msg = if entry.message.len() > max_msg_len {
-                format!("{}...", &entry.message[..max_msg_len.saturating_sub(3)])
+            let char_count = entry.message.chars().count();
+            let msg = if char_count > max_msg_len {
+                let truncate_at = max_msg_len.saturating_sub(3);
+                format!("{}...", entry.message.chars().take(truncate_at).collect::<String>())
             } else {
                 entry.message.clone()
             };
