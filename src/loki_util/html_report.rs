@@ -1001,6 +1001,21 @@ pub fn render_combined_html(
         let filterList = [];
         let selectedText = '';
         
+        // Pre-cached card data for fast filtering
+        let cardCache = null;
+        
+        // Initialize card cache on first use
+        function initCardCache() {
+            if (cardCache) return;
+            const cards = document.querySelectorAll('.finding-card');
+            cardCache = Array.from(cards).map(card => ({
+                element: card,
+                hostname: card.dataset.hostname,
+                severity: card.dataset.severity,
+                text: card.textContent
+            }));
+        }
+        
         // Load filters from localStorage on page load
         function loadFilters() {
             try {
@@ -1013,6 +1028,7 @@ pub fn render_combined_html(
                 console.warn('Failed to load filters:', e);
                 filterList = [];
             }
+            initCardCache();
             updateFilterUI();
             applyAllFilters();
         }
@@ -1280,31 +1296,44 @@ pub fn render_combined_html(
         }
         
         function applyAllFilters() {
-            document.querySelectorAll('.finding-card').forEach(card => {
-                const cardHostname = card.dataset.hostname;
-                const cardSeverity = card.dataset.severity;
-                const cardText = card.textContent;
-                
-                let show = true;
-                
-                // Check hostname/severity filters
-                if (activeHostname && cardHostname !== activeHostname) {
-                    show = false;
-                }
-                
-                if (activeSeverity && cardSeverity !== activeSeverity) {
-                    show = false;
-                }
-                
-                // Check exclusion filters (exact match)
-                if (show && filterList.some(f => cardText.includes(f))) {
-                    show = false;
-                }
-                
-                if (show) {
-                    card.classList.remove('hidden');
-                } else {
-                    card.classList.add('hidden');
+            initCardCache();
+            
+            const hasExclusions = filterList.length > 0;
+            
+            // Use requestAnimationFrame for smoother UI updates
+            requestAnimationFrame(() => {
+                const len = cardCache.length;
+                for (let i = 0; i < len; i++) {
+                    const cached = cardCache[i];
+                    
+                    // Check hostname filter
+                    if (activeHostname && cached.hostname !== activeHostname) {
+                        cached.element.classList.add('hidden');
+                        continue;
+                    }
+                    
+                    // Check severity filter
+                    if (activeSeverity && cached.severity !== activeSeverity) {
+                        cached.element.classList.add('hidden');
+                        continue;
+                    }
+                    
+                    // Check exclusion filters (exact match)
+                    if (hasExclusions) {
+                        let excluded = false;
+                        for (let j = 0; j < filterList.length; j++) {
+                            if (cached.text.includes(filterList[j])) {
+                                excluded = true;
+                                break;
+                            }
+                        }
+                        if (excluded) {
+                            cached.element.classList.add('hidden');
+                            continue;
+                        }
+                    }
+                    
+                    cached.element.classList.remove('hidden');
                 }
             });
         }

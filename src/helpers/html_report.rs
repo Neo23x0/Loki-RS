@@ -1391,11 +1391,28 @@ pub fn render_html(data: &ReportData, scan_config: &ScanConfig, version: &str, j
     
     <script>
         // =====================================================
-        // FILTER STATE MANAGEMENT
+        // PERFORMANCE-OPTIMIZED FILTER SYSTEM
         // =====================================================
         const STORAGE_KEY = 'loki_filters_' + '{jsonl_filename}'.replace(/[^a-zA-Z0-9]/g, '_');
         let filterList = [];
         let selectedText = '';
+        
+        // Pre-cached card data for fast filtering
+        let cardCache = null;
+        let debounceTimer = null;
+        const DEBOUNCE_MS = 150;
+        
+        // Initialize card cache on first use
+        function initCardCache() {{
+            if (cardCache) return;
+            const cards = document.querySelectorAll('.finding-card');
+            cardCache = Array.from(cards).map(card => ({{
+                element: card,
+                level: card.dataset.level,
+                text: card.textContent,
+                textLower: card.textContent.toLowerCase()
+            }}));
+        }}
         
         // Load filters from localStorage on page load
         function loadFilters() {{
@@ -1409,6 +1426,7 @@ pub fn render_html(data: &ReportData, scan_config: &ScanConfig, version: &str, j
                 console.warn('Failed to load filters:', e);
                 filterList = [];
             }}
+            initCardCache();
             updateFilterUI();
             applyAllFilters();
         }}
@@ -1591,12 +1609,17 @@ pub fn render_html(data: &ReportData, scan_config: &ScanConfig, version: &str, j
         }}
         
         // =====================================================
-        // COMBINED FILTER LOGIC
+        // COMBINED FILTER LOGIC (Performance Optimized)
         // =====================================================
         const searchInput = document.getElementById('searchInput');
-        searchInput.addEventListener('input', applyAllFilters);
         
-        // Filter by severity level
+        // Debounced search input handler
+        searchInput.addEventListener('input', () => {{
+            clearTimeout(debounceTimer);
+            debounceTimer = setTimeout(applyAllFilters, DEBOUNCE_MS);
+        }});
+        
+        // Filter by severity level (immediate, no debounce needed)
         document.querySelectorAll('.filter-btn').forEach(btn => {{
             btn.addEventListener('click', () => {{
                 document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
@@ -1606,26 +1629,47 @@ pub fn render_html(data: &ReportData, scan_config: &ScanConfig, version: &str, j
         }});
         
         function applyAllFilters() {{
+            initCardCache();
+            
             const query = searchInput.value.toLowerCase();
             const activeFilter = document.querySelector('.filter-btn.active').dataset.filter;
+            const hasQuery = query.length > 0;
+            const hasExclusions = filterList.length > 0;
             
-            document.querySelectorAll('.finding-card').forEach(card => {{
-                const cardText = card.textContent;
-                const cardTextLower = cardText.toLowerCase();
-                
-                // Check level filter
-                const matchesLevel = activeFilter === 'all' || card.dataset.level === activeFilter;
-                
-                // Check search filter
-                const matchesSearch = !query || cardTextLower.includes(query);
-                
-                // Check exclusion filters (exact match)
-                const matchesExclusion = filterList.some(f => cardText.includes(f));
-                
-                if (matchesLevel && matchesSearch && !matchesExclusion) {{
-                    card.classList.remove('hidden');
-                }} else {{
-                    card.classList.add('hidden');
+            // Use requestAnimationFrame for smoother UI updates
+            requestAnimationFrame(() => {{
+                const len = cardCache.length;
+                for (let i = 0; i < len; i++) {{
+                    const cached = cardCache[i];
+                    
+                    // Check level filter
+                    if (activeFilter !== 'all' && cached.level !== activeFilter) {{
+                        cached.element.classList.add('hidden');
+                        continue;
+                    }}
+                    
+                    // Check search filter
+                    if (hasQuery && !cached.textLower.includes(query)) {{
+                        cached.element.classList.add('hidden');
+                        continue;
+                    }}
+                    
+                    // Check exclusion filters (exact match on original text)
+                    if (hasExclusions) {{
+                        let excluded = false;
+                        for (let j = 0; j < filterList.length; j++) {{
+                            if (cached.text.includes(filterList[j])) {{
+                                excluded = true;
+                                break;
+                            }}
+                        }}
+                        if (excluded) {{
+                            cached.element.classList.add('hidden');
+                            continue;
+                        }}
+                    }}
+                    
+                    cached.element.classList.remove('hidden');
                 }}
             }});
         }}
