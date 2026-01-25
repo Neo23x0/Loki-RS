@@ -38,6 +38,9 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cargo-test-
 
+      - name: Run unit tests
+        run: cargo test --verbose -- --test-threads=1
+
       - name: Build release binaries
         run: cargo build --release
 
@@ -146,6 +149,9 @@ jobs:
           key: windows-cargo-test-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
             windows-cargo-test-
+
+      - name: Run unit tests
+        run: cargo test --verbose -- --test-threads=1
 
       - name: Build release binaries
         run: cargo build --release

@@ -1231,4 +1231,296 @@ mod tests {
             assert!(!REL_EXTS.contains(&ext_with_dot.as_str()));
         }
     }
+
+    mod cloud_path_exclusion_tests {
+        use super::*;
+
+        #[test]
+        fn test_unix_dropbox_path_excluded() {
+            let path = "/home/user/Dropbox/documents/file.exe";
+            assert!(is_cloud_or_remote_path(path));
+        }
+
+        #[test]
+        fn test_unix_dropbox_hidden_path_excluded() {
+            let path = "/home/user/.dropbox/cache/file.dll";
+            assert!(is_cloud_or_remote_path(path));
+        }
+
+        #[test]
+        fn test_unix_onedrive_path_excluded() {
+            let path = "/home/user/OneDrive/work/report.ps1";
+            assert!(is_cloud_or_remote_path(path));
+        }
+
+        #[test]
+        fn test_unix_google_drive_path_excluded() {
+            let path = "/home/user/Google Drive/shared/script.sh";
+            assert!(is_cloud_or_remote_path(path));
+        }
+
+        #[test]
+        fn test_unix_nextcloud_path_excluded() {
+            let path = "/home/user/Nextcloud/projects/app.exe";
+            assert!(is_cloud_or_remote_path(path));
+        }
+
+        #[test]
+        fn test_unix_mega_path_excluded() {
+            let path = "/home/user/MEGA/backups/archive.zip";
+            assert!(is_cloud_or_remote_path(path));
+        }
+
+        #[test]
+        fn test_unix_megasync_path_excluded() {
+            let path = "/home/user/MEGAsync/sync/data.bin";
+            assert!(is_cloud_or_remote_path(path));
+        }
+
+        #[test]
+        fn test_unix_pcloud_path_excluded() {
+            let path = "/home/user/pCloud/photos/image.jpg";
+            assert!(is_cloud_or_remote_path(path));
+        }
+
+        #[test]
+        fn test_unix_seafile_path_excluded() {
+            let path = "/home/user/Seafile/library/document.docx";
+            assert!(is_cloud_or_remote_path(path));
+        }
+
+        #[test]
+        fn test_unix_owncloud_path_excluded() {
+            let path = "/home/user/ownCloud/shared/file.exe";
+            assert!(is_cloud_or_remote_path(path));
+        }
+
+        #[test]
+        fn test_unix_syncthing_path_excluded() {
+            let path = "/home/user/Syncthing/folder/data.dll";
+            assert!(is_cloud_or_remote_path(path));
+        }
+
+        #[test]
+        fn test_unix_resilio_sync_path_excluded() {
+            let path = "/home/user/Resilio Sync/shared/file.exe";
+            assert!(is_cloud_or_remote_path(path));
+        }
+
+        #[test]
+        fn test_regular_path_not_excluded() {
+            let path = "/home/user/documents/work/project.exe";
+            assert!(!is_cloud_or_remote_path(path));
+        }
+
+        #[test]
+        fn test_tmp_path_not_excluded_as_cloud() {
+            let path = "/tmp/suspicious.exe";
+            assert!(!is_cloud_or_remote_path(path));
+        }
+
+        #[test]
+        fn test_var_path_not_excluded_as_cloud() {
+            let path = "/var/log/app.log";
+            assert!(!is_cloud_or_remote_path(path));
+        }
+
+        #[test]
+        fn test_opt_path_not_excluded_as_cloud() {
+            let path = "/opt/application/bin/app";
+            assert!(!is_cloud_or_remote_path(path));
+        }
+
+        #[test]
+        fn test_case_insensitive_dropbox() {
+            // Test that cloud path matching is case-insensitive
+            let path_lower = "/home/user/dropbox/file.exe";
+            let path_upper = "/home/user/DROPBOX/file.exe";
+            let path_mixed = "/home/user/DropBox/file.exe";
+            assert!(is_cloud_or_remote_path(path_lower));
+            assert!(is_cloud_or_remote_path(path_upper));
+            assert!(is_cloud_or_remote_path(path_mixed));
+        }
+
+        #[test]
+        fn test_case_insensitive_onedrive() {
+            let path_lower = "/home/user/onedrive/file.exe";
+            let path_upper = "/home/user/ONEDRIVE/file.exe";
+            assert!(is_cloud_or_remote_path(path_lower));
+            assert!(is_cloud_or_remote_path(path_upper));
+        }
+    }
+
+    mod system_path_exclusion_tests {
+        use super::*;
+
+        #[test]
+        fn test_proc_cmdline_excluded() {
+            let path = "/proc/1234/cmdline";
+            let should_skip = LINUX_PATH_SKIPS_START.iter().any(|skip| path.starts_with(skip));
+            assert!(should_skip);
+        }
+
+        #[test]
+        fn test_proc_exe_excluded() {
+            let path = "/proc/1/exe";
+            let should_skip = LINUX_PATH_SKIPS_START.iter().any(|skip| path.starts_with(skip));
+            assert!(should_skip);
+        }
+
+        #[test]
+        fn test_dev_null_excluded() {
+            let path = "/dev/null";
+            let should_skip = LINUX_PATH_SKIPS_START.iter().any(|skip| path.starts_with(skip));
+            assert!(should_skip);
+        }
+
+        #[test]
+        fn test_dev_sda_excluded() {
+            let path = "/dev/sda1";
+            let should_skip = LINUX_PATH_SKIPS_START.iter().any(|skip| path.starts_with(skip));
+            assert!(should_skip);
+        }
+
+        #[test]
+        fn test_sys_kernel_debug_excluded() {
+            let path = "/sys/kernel/debug/tracing/trace";
+            let should_skip = LINUX_PATH_SKIPS_START.iter().any(|skip| path.starts_with(skip));
+            assert!(should_skip);
+        }
+
+        #[test]
+        fn test_sys_kernel_tracing_excluded() {
+            let path = "/sys/kernel/tracing/events";
+            let should_skip = LINUX_PATH_SKIPS_START.iter().any(|skip| path.starts_with(skip));
+            assert!(should_skip);
+        }
+
+        #[test]
+        fn test_sys_kernel_slab_excluded() {
+            let path = "/sys/kernel/slab/kmalloc-64";
+            let should_skip = LINUX_PATH_SKIPS_START.iter().any(|skip| path.starts_with(skip));
+            assert!(should_skip);
+        }
+
+        #[test]
+        fn test_sys_devices_excluded() {
+            let path = "/sys/devices/pci0000:00/0000:00:1f.0";
+            let should_skip = LINUX_PATH_SKIPS_START.iter().any(|skip| path.starts_with(skip));
+            assert!(should_skip);
+        }
+
+        #[test]
+        fn test_usr_src_linux_excluded() {
+            let path = "/usr/src/linux/kernel/sched.c";
+            let should_skip = LINUX_PATH_SKIPS_START.iter().any(|skip| path.starts_with(skip));
+            assert!(should_skip);
+        }
+
+        #[test]
+        fn test_initctl_path_excluded() {
+            let path = "/run/initctl";
+            let should_skip = LINUX_PATH_SKIPS_END.iter().any(|skip| path.ends_with(skip));
+            assert!(should_skip);
+        }
+
+        #[test]
+        fn test_var_run_initctl_excluded() {
+            let path = "/var/run/initctl";
+            let should_skip = LINUX_PATH_SKIPS_END.iter().any(|skip| path.ends_with(skip));
+            assert!(should_skip);
+        }
+
+        #[test]
+        fn test_media_usb_excluded() {
+            let path = "/media/usb/files/document.exe";
+            let should_skip = MOUNTED_DEVICES.iter().any(|skip| path.starts_with(skip));
+            assert!(should_skip);
+        }
+
+        #[test]
+        fn test_volumes_external_excluded() {
+            let path = "/volumes/External/backup.tar";
+            let should_skip = MOUNTED_DEVICES.iter().any(|skip| path.starts_with(skip));
+            assert!(should_skip);
+        }
+
+        #[test]
+        fn test_home_path_not_excluded() {
+            let path = "/home/user/.local/bin/app";
+            let should_skip_start = LINUX_PATH_SKIPS_START.iter().any(|skip| path.starts_with(skip));
+            let should_skip_end = LINUX_PATH_SKIPS_END.iter().any(|skip| path.ends_with(skip));
+            let should_skip_mounted = MOUNTED_DEVICES.iter().any(|skip| path.starts_with(skip));
+            assert!(!should_skip_start);
+            assert!(!should_skip_end);
+            assert!(!should_skip_mounted);
+        }
+
+        #[test]
+        fn test_usr_bin_not_excluded() {
+            let path = "/usr/bin/python3";
+            let should_skip_start = LINUX_PATH_SKIPS_START.iter().any(|skip| path.starts_with(skip));
+            assert!(!should_skip_start);
+        }
+
+        #[test]
+        fn test_etc_not_excluded() {
+            let path = "/etc/passwd";
+            let should_skip_start = LINUX_PATH_SKIPS_START.iter().any(|skip| path.starts_with(skip));
+            assert!(!should_skip_start);
+        }
+
+        #[test]
+        fn test_var_log_not_excluded() {
+            let path = "/var/log/syslog";
+            let should_skip_start = LINUX_PATH_SKIPS_START.iter().any(|skip| path.starts_with(skip));
+            assert!(!should_skip_start);
+        }
+    }
+
+    mod program_directory_exclusion_tests {
+        use super::*;
+        use std::path::Path;
+
+        #[test]
+        fn test_program_dir_match() {
+            let program_dir = "/opt/loki";
+            let file_path = Path::new("/opt/loki/signatures/rules.yar");
+            let program_dir_path = Path::new(program_dir);
+            assert!(file_path.starts_with(program_dir_path));
+        }
+
+        #[test]
+        fn test_program_dir_exact_match() {
+            let program_dir = "/opt/loki";
+            let file_path = Path::new("/opt/loki");
+            let program_dir_path = Path::new(program_dir);
+            assert!(file_path.starts_with(program_dir_path));
+        }
+
+        #[test]
+        fn test_program_dir_no_match_similar_prefix() {
+            let program_dir = "/opt/loki";
+            let file_path = Path::new("/opt/loki2/file.exe");
+            let program_dir_path = Path::new(program_dir);
+            // This should NOT match because loki2 is different from loki
+            assert!(!file_path.starts_with(program_dir_path));
+        }
+
+        #[test]
+        fn test_program_dir_no_match_different_path() {
+            let program_dir = "/opt/loki";
+            let file_path = Path::new("/home/user/malware.exe");
+            let program_dir_path = Path::new(program_dir);
+            assert!(!file_path.starts_with(program_dir_path));
+        }
+
+        #[test]
+        fn test_program_dir_nested_file() {
+            let program_dir = "/usr/local/loki";
+            let file_path = Path::new("/usr/local/loki/config/excludes.cfg");
+            let program_dir_path = Path::new(program_dir);
+            assert!(file_path.starts_with(program_dir_path));
+        }
+    }
 }

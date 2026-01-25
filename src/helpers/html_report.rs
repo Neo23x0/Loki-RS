@@ -2203,11 +2203,13 @@ mod tests {
     
     #[test]
     fn test_format_size() {
+        // Note: format_size uses decimal units (1000-based), not binary (1024-based)
         assert_eq!(format_size(500), "500 B");
-        assert_eq!(format_size(1024), "1.0 KB");
-        assert_eq!(format_size(1536), "1.5 KB");
-        assert_eq!(format_size(1048576), "1.0 MB");
-        assert_eq!(format_size(1073741824), "1.0 GB");
+        assert_eq!(format_size(1000), "1.0 KB");
+        assert_eq!(format_size(1500), "1.5 KB");
+        assert_eq!(format_size(1_000_000), "1.0 MB");
+        assert_eq!(format_size(1_000_000_000), "1.0 GB");
+        assert_eq!(format_size(1_500_000_000), "1.5 GB");
     }
     
     #[test]

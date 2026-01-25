@@ -2050,4 +2050,376 @@ mod tests {
             assert!(m.matched_strings.is_empty());
         }
     }
+
+    mod hash_false_positive_exclusion_tests {
+        use super::*;
+
+        fn create_fp_hash_collection() -> Vec<HashIOC> {
+            let mut iocs = vec![
+                HashIOC {
+                    hash_type: HashType::Md5,
+                    hash_value: "d41d8cd98f00b204e9800998ecf8427e".to_string(), // Empty file MD5
+                    description: "Empty file - known good".to_string(),
+                    score: 0,
+                },
+                HashIOC {
+                    hash_type: HashType::Md5,
+                    hash_value: "098f6bcd4621d373cade4e832627b4f6".to_string(), // "test" MD5
+                    description: "Test file - whitelisted".to_string(),
+                    score: 0,
+                },
+                HashIOC {
+                    hash_type: HashType::Md5,
+                    hash_value: "5d41402abc4b2a76b9719d911017c592".to_string(), // "hello" MD5
+                    description: "Hello file - legitimate".to_string(),
+                    score: 0,
+                },
+            ];
+            iocs.sort_by(|a, b| a.hash_value.cmp(&b.hash_value));
+            iocs
+        }
+
+        fn create_malicious_hash_collection() -> Vec<HashIOC> {
+            let mut iocs = vec![
+                HashIOC {
+                    hash_type: HashType::Md5,
+                    hash_value: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(),
+                    description: "Known malware hash A".to_string(),
+                    score: 100,
+                },
+                HashIOC {
+                    hash_type: HashType::Md5,
+                    hash_value: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".to_string(),
+                    description: "Known malware hash B".to_string(),
+                    score: 90,
+                },
+            ];
+            iocs.sort_by(|a, b| a.hash_value.cmp(&b.hash_value));
+            iocs
+        }
+
+        #[test]
+        fn test_fp_hash_found_should_exclude() {
+            let fp_hashes = create_fp_hash_collection();
+            // Empty file hash should be found in false positives
+            let result = find_hash_ioc("d41d8cd98f00b204e9800998ecf8427e", &fp_hashes);
+            assert!(result.is_some(), "Empty file hash should be in FP list");
+        }
+
+        #[test]
+        fn test_fp_hash_not_found_should_scan() {
+            let fp_hashes = create_fp_hash_collection();
+            // Random hash should NOT be in false positives
+            let result = find_hash_ioc("ffffffffffffffffffffffffffffffff", &fp_hashes);
+            assert!(result.is_none(), "Random hash should not be in FP list");
+        }
+
+        #[test]
+        fn test_malicious_hash_not_in_fp_list() {
+            let fp_hashes = create_fp_hash_collection();
+            // Malicious hash should NOT be in false positive list
+            let result = find_hash_ioc("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", &fp_hashes);
+            assert!(result.is_none(), "Malicious hash should not be in FP list");
+        }
+
+        #[test]
+        fn test_fp_hash_exclusion_logic() {
+            let fp_hashes = create_fp_hash_collection();
+            let malicious_hashes = create_malicious_hash_collection();
+
+            // Simulate file scanning logic:
+            // If hash is in FP list -> skip (don't scan for IOCs)
+            // If hash is NOT in FP list -> continue scanning
+
+            let file_hash = "d41d8cd98f00b204e9800998ecf8427e"; // Empty file
+
+            // Check FP first
+            let is_fp = find_hash_ioc(file_hash, &fp_hashes).is_some();
+            assert!(is_fp, "Empty file should be detected as false positive");
+
+            // If it's a FP, we skip IOC matching
+            if !is_fp {
+                let _ = find_hash_ioc(file_hash, &malicious_hashes);
+                panic!("Should not reach IOC matching for FP files");
+            }
+        }
+
+        #[test]
+        fn test_malicious_hash_detection_not_blocked_by_fp() {
+            let fp_hashes = create_fp_hash_collection();
+            let malicious_hashes = create_malicious_hash_collection();
+
+            let file_hash = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"; // Malicious hash
+
+            // Check FP first
+            let is_fp = find_hash_ioc(file_hash, &fp_hashes).is_some();
+            assert!(!is_fp, "Malicious hash should NOT be in FP list");
+
+            // Since not FP, check malicious IOCs
+            let is_malicious = find_hash_ioc(file_hash, &malicious_hashes);
+            assert!(is_malicious.is_some(), "Malicious hash should be detected");
+            assert_eq!(is_malicious.unwrap().score, 100);
+        }
+
+        #[test]
+        fn test_multiple_fp_hashes() {
+            let fp_hashes = create_fp_hash_collection();
+
+            // All these should be found as false positives
+            assert!(find_hash_ioc("d41d8cd98f00b204e9800998ecf8427e", &fp_hashes).is_some());
+            assert!(find_hash_ioc("098f6bcd4621d373cade4e832627b4f6", &fp_hashes).is_some());
+            assert!(find_hash_ioc("5d41402abc4b2a76b9719d911017c592", &fp_hashes).is_some());
+        }
+
+        #[test]
+        fn test_fp_hash_case_sensitivity() {
+            let fp_hashes = create_fp_hash_collection();
+
+            // Hash lookup should work with lowercase
+            let result_lower = find_hash_ioc("d41d8cd98f00b204e9800998ecf8427e", &fp_hashes);
+            assert!(result_lower.is_some());
+
+            // Note: find_hash_ioc uses binary search on exact match,
+            // so case matters - hashes should be normalized to lowercase
+        }
+    }
+
+    mod filename_false_positive_exclusion_tests {
+        use super::*;
+
+        fn create_filename_iocs_with_fp() -> Vec<FilenameIOC> {
+            vec![
+                // Pattern that matches all .ps1 files, but excludes SysInternals
+                FilenameIOC {
+                    pattern: r"(?i)\\procdump(64)?\.exe$".to_string(),
+                    regex: Regex::new(r"(?i)\\procdump(64)?\.exe$").unwrap(),
+                    regex_fp: Some(Regex::new(r"(?i)SysInternals\\").unwrap()),
+                    description: "ProcDump tool - potential credential dumping".to_string(),
+                    score: 70,
+                },
+                // Pattern for mimikatz with no false positive regex
+                FilenameIOC {
+                    pattern: r"(?i)mimikatz\.exe$".to_string(),
+                    regex: Regex::new(r"(?i)mimikatz\.exe$").unwrap(),
+                    regex_fp: None,
+                    description: "Mimikatz credential dumping tool".to_string(),
+                    score: 100,
+                },
+                // Pattern for .ps1 files, excluding legitimate scripts
+                FilenameIOC {
+                    pattern: r"(?i)invoke-.*\.ps1$".to_string(),
+                    regex: Regex::new(r"(?i)invoke-.*\.ps1$").unwrap(),
+                    regex_fp: Some(Regex::new(r"(?i)(pester|module|test)").unwrap()),
+                    description: "Suspicious PowerShell invoke script".to_string(),
+                    score: 60,
+                },
+                // Pattern for nc.exe (netcat) with vendor exclusion
+                FilenameIOC {
+                    pattern: r"(?i)\\nc(at)?\.exe$".to_string(),
+                    regex: Regex::new(r"(?i)\\nc(at)?\.exe$").unwrap(),
+                    regex_fp: Some(Regex::new(r"(?i)(nmap|cygwin|git)").unwrap()),
+                    description: "Netcat - potential reverse shell tool".to_string(),
+                    score: 75,
+                },
+            ]
+        }
+
+        #[test]
+        fn test_procdump_detected_in_random_folder() {
+            let iocs = create_filename_iocs_with_fp();
+            let path = r"C:\Users\attacker\tools\procdump.exe";
+
+            let fioc = &iocs[0];
+            let matches = fioc.regex.is_match(path);
+            assert!(matches, "ProcDump should match the pattern");
+
+            let is_fp = fioc.regex_fp.as_ref().map_or(false, |fp| fp.is_match(path));
+            assert!(!is_fp, "Random folder should not be false positive");
+        }
+
+        #[test]
+        fn test_procdump_excluded_in_sysinternals() {
+            let iocs = create_filename_iocs_with_fp();
+            let path = r"C:\Tools\SysInternals\procdump.exe";
+
+            let fioc = &iocs[0];
+            let matches = fioc.regex.is_match(path);
+            assert!(matches, "ProcDump should match the pattern");
+
+            let is_fp = fioc.regex_fp.as_ref().map_or(false, |fp| fp.is_match(path));
+            assert!(is_fp, "SysInternals path should be false positive");
+        }
+
+        #[test]
+        fn test_procdump64_excluded_in_sysinternals() {
+            let iocs = create_filename_iocs_with_fp();
+            let path = r"C:\SysInternals\procdump64.exe";
+
+            let fioc = &iocs[0];
+            let matches = fioc.regex.is_match(path);
+            assert!(matches, "ProcDump64 should match the pattern");
+
+            let is_fp = fioc.regex_fp.as_ref().map_or(false, |fp| fp.is_match(path));
+            assert!(is_fp, "SysInternals path should be false positive");
+        }
+
+        #[test]
+        fn test_mimikatz_always_detected_no_fp() {
+            let iocs = create_filename_iocs_with_fp();
+            let paths = vec![
+                r"C:\temp\mimikatz.exe",
+                r"C:\SysInternals\mimikatz.exe",  // Even in SysInternals
+                r"C:\legitimate\tools\mimikatz.exe",
+            ];
+
+            let fioc = &iocs[1];
+            for path in paths {
+                let matches = fioc.regex.is_match(path);
+                assert!(matches, "Mimikatz should match: {}", path);
+
+                // No FP regex for mimikatz
+                assert!(fioc.regex_fp.is_none(), "Mimikatz should have no FP regex");
+            }
+        }
+
+        #[test]
+        fn test_invoke_script_detected() {
+            let iocs = create_filename_iocs_with_fp();
+            let path = r"C:\Users\attacker\Invoke-Mimikatz.ps1";
+
+            let fioc = &iocs[2];
+            let matches = fioc.regex.is_match(path);
+            assert!(matches, "Invoke script should match");
+
+            let is_fp = fioc.regex_fp.as_ref().map_or(false, |fp| fp.is_match(path));
+            assert!(!is_fp, "Malicious invoke script should not be FP");
+        }
+
+        #[test]
+        fn test_invoke_script_excluded_if_pester() {
+            let iocs = create_filename_iocs_with_fp();
+            let path = r"C:\Modules\Pester\Invoke-Pester.ps1";
+
+            let fioc = &iocs[2];
+            let matches = fioc.regex.is_match(path);
+            assert!(matches, "Invoke-Pester should match pattern");
+
+            let is_fp = fioc.regex_fp.as_ref().map_or(false, |fp| fp.is_match(path));
+            assert!(is_fp, "Pester path should be false positive");
+        }
+
+        #[test]
+        fn test_invoke_script_excluded_if_test() {
+            let iocs = create_filename_iocs_with_fp();
+            let path = r"C:\Tests\Invoke-Test.ps1";
+
+            let fioc = &iocs[2];
+            let matches = fioc.regex.is_match(path);
+            assert!(matches, "Invoke-Test should match pattern");
+
+            let is_fp = fioc.regex_fp.as_ref().map_or(false, |fp| fp.is_match(path));
+            assert!(is_fp, "Test path should be false positive");
+        }
+
+        #[test]
+        fn test_netcat_detected_in_random_folder() {
+            let iocs = create_filename_iocs_with_fp();
+            let path = r"C:\tools\hacking\nc.exe";
+
+            let fioc = &iocs[3];
+            let matches = fioc.regex.is_match(path);
+            assert!(matches, "Netcat should match");
+
+            let is_fp = fioc.regex_fp.as_ref().map_or(false, |fp| fp.is_match(path));
+            assert!(!is_fp, "Random folder should not be FP");
+        }
+
+        #[test]
+        fn test_netcat_excluded_in_nmap() {
+            let iocs = create_filename_iocs_with_fp();
+            let path = r"C:\Program Files\Nmap\ncat.exe";
+
+            let fioc = &iocs[3];
+            let matches = fioc.regex.is_match(path);
+            assert!(matches, "Ncat should match pattern");
+
+            let is_fp = fioc.regex_fp.as_ref().map_or(false, |fp| fp.is_match(path));
+            assert!(is_fp, "Nmap path should be false positive");
+        }
+
+        #[test]
+        fn test_netcat_excluded_in_cygwin() {
+            let iocs = create_filename_iocs_with_fp();
+            let path = r"C:\cygwin64\bin\nc.exe";
+
+            let fioc = &iocs[3];
+            let matches = fioc.regex.is_match(path);
+            assert!(matches, "NC should match pattern");
+
+            let is_fp = fioc.regex_fp.as_ref().map_or(false, |fp| fp.is_match(path));
+            assert!(is_fp, "Cygwin path should be false positive");
+        }
+
+        #[test]
+        fn test_full_exclusion_logic_simulation() {
+            let iocs = create_filename_iocs_with_fp();
+
+            // Test cases: (path, expected_match, expected_is_fp, expected_report)
+            let test_cases = vec![
+                (r"C:\temp\procdump.exe", true, false, true),      // Match, not FP -> report
+                (r"C:\SysInternals\procdump.exe", true, true, false), // Match, is FP -> no report
+                (r"C:\temp\mimikatz.exe", true, false, true),      // Always report mimikatz
+                (r"C:\Pester\Invoke-Test.ps1", true, true, false), // Match, is FP -> no report
+                (r"C:\attack\Invoke-Mimikatz.ps1", true, false, true), // Match, not FP -> report
+            ];
+
+            for (path, expected_match, expected_fp, expected_report) in test_cases {
+                let mut reported = false;
+
+                for fioc in &iocs {
+                    if fioc.regex.is_match(path) {
+                        assert!(expected_match, "Path {} should match", path);
+
+                        let is_fp = fioc.regex_fp.as_ref().map_or(false, |fp| fp.is_match(path));
+
+                        if !is_fp {
+                            reported = true;
+                            break;
+                        }
+                    }
+                }
+
+                assert_eq!(reported, expected_report,
+                    "Path {} should be reported={}, but was reported={}",
+                    path, expected_report, reported);
+            }
+        }
+
+        #[test]
+        fn test_fp_regex_none_always_reports() {
+            // When regex_fp is None, there's no false positive exclusion
+            let ioc = FilenameIOC {
+                pattern: r".*\.exe$".to_string(),
+                regex: Regex::new(r".*\.exe$").unwrap(),
+                regex_fp: None,
+                description: "All executables".to_string(),
+                score: 50,
+            };
+
+            let test_paths = vec![
+                r"C:\anywhere\file.exe",
+                r"C:\SysInternals\tool.exe",
+                r"C:\legitimate\app.exe",
+            ];
+
+            for path in test_paths {
+                let matches = ioc.regex.is_match(path);
+                assert!(matches, "Should match {}", path);
+
+                // No FP regex means no exclusion
+                let is_fp = ioc.regex_fp.as_ref().map_or(false, |fp| fp.is_match(path));
+                assert!(!is_fp, "Should not be FP when regex_fp is None: {}", path);
+            }
+        }
+    }
 }

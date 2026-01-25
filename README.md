@@ -130,6 +130,107 @@ sudo ./loki --remote syslog-host.internal:514 --remote-proto udp
 | `--trace` | `false` | Show verbose trace output |
 | `--show-access-errors` | `false` | Show file/process access errors |
 
+## Excluding Files and Folders
+
+Loki-RS provides multiple mechanisms for excluding files and folders from scans.
+
+### Built-in Automatic Exclusions
+
+By default, Loki-RS automatically excludes:
+
+**System directories (Linux/macOS):**
+- `/proc`, `/dev`, `/sys/kernel/debug`, `/sys/kernel/slab`, `/sys/kernel/tracing`, `/sys/devices`
+- `/run`, `/var/run`
+
+**Cloud storage directories** (unless `--scan-all-drives` is used):
+- OneDrive, Dropbox, Google Drive, iCloud, Box, Nextcloud, pCloud, MEGA, Seafile, ownCloud, and others
+
+**Network and mounted drives** (unless `--scan-all-drives` is used):
+- NFS, CIFS/SMB, SSHFS, WebDAV mounts
+- External media under `/media`, `/volumes`
+
+**Program directory:**
+- Loki-RS automatically excludes its own directory to prevent scanning itself
+
+### Command-Line Exclusion Options
+
+| Option | Description |
+|--------|-------------|
+| `--scan-all-drives` | Include mounted drives, network drives, and cloud storage |
+| `--scan-all-files` | Scan all files regardless of file type/extension (by default, only relevant file types are scanned) |
+| `-m, --max-file-size <BYTES>` | Skip files larger than this size (default: 64MB) |
+| `--no-procs` | Skip process memory scanning entirely |
+| `--no-fs` | Skip filesystem scanning entirely |
+| `--no-archive` | Skip scanning inside archive files (ZIP) |
+
+### Hash-Based False Positive Exclusions
+
+You can exclude known good files by their hash. This is useful for whitelisting legitimate files that trigger false positives.
+
+**Setup:**
+1. Create a file in `signatures/iocs/` with both `hash` and `falsepositive` in the filename
+   Example: `hash-falsepositive-custom.txt`
+
+2. Add hashes (MD5, SHA1, or SHA256) with optional descriptions:
+```
+# Format: HASH;description
+d41d8cd98f00b204e9800998ecf8427e;Empty file - known good
+a7f5f35426b927411fc9231b56382173;Legitimate system utility
+```
+
+Files matching these hashes will be silently skipped during scanning.
+
+### Filename Pattern False Positive Exclusions
+
+When adding filename IOCs to `signatures/iocs/filename-iocs.txt`, you can specify a false positive exclusion regex in the third column:
+
+```
+# Format: REGEX;SCORE;FALSE_POSITIVE_REGEX
+#
+# This matches all .ps1 files, but excludes those in SysInternals directories
+(?i)\\procdump(64)?\.(exe|zip);50;(?i)(SysInternals\\)
+```
+
+If a file matches both the main pattern AND the false positive regex, it will not be reported.
+
+### Configuration File Exclusions
+
+The `config/excludes.cfg` file supports regex-based path exclusions:
+
+```
+# Exclude system directories
+^/proc/.*
+^/dev/.*
+^/sys/.*
+
+# Exclude temporary files
+.*\.tmp$
+.*\.temp$
+.*\.swp$
+
+# Exclude specific directories
+.*node_modules.*
+.*/\.git/.*
+```
+
+**Note:** Path exclusion patterns are matched against the full file path using regular expressions. Lines starting with `#` are comments.
+
+### Examples
+
+```bash
+# Scan but include all drives (network, cloud, mounted)
+sudo ./loki --scan-all-drives
+
+# Scan all file types, not just executables and scripts
+sudo ./loki --scan-all-files
+
+# Scan only small files (under 10MB)
+sudo ./loki --max-file-size 10000000
+
+# Skip process scanning (useful for mounted images)
+sudo ./loki --no-procs --folder /mnt/image
+```
+
 ## TUI Mode
 
 The terminal interface is enabled by default and provides real-time monitoring during scans.
@@ -207,6 +308,7 @@ Requires Rust toolchain. See [docs/BUILD.md](docs/BUILD.md) for cross-compilatio
 - [Build Guide](docs/BUILD.md)
 - [Score Calculation](docs/score_calculation.md)
 - [Parity Matrix](docs/parity_matrix.md)
+- [Excluding Files and Folders](#excluding-files-and-folders)
 
 ## About
 
