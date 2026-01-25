@@ -1232,7 +1232,8 @@ mod tests {
         }
     }
 
-    mod cloud_path_exclusion_tests {
+    #[cfg(unix)]
+    mod cloud_path_exclusion_tests_unix {
         use super::*;
 
         #[test]
@@ -1347,6 +1348,79 @@ mod tests {
             let path_lower = "/home/user/onedrive/file.exe";
             let path_upper = "/home/user/ONEDRIVE/file.exe";
             assert!(is_cloud_or_remote_path(path_lower));
+            assert!(is_cloud_or_remote_path(path_upper));
+        }
+    }
+
+    #[cfg(windows)]
+    mod cloud_path_exclusion_tests_windows {
+        use super::*;
+
+        #[test]
+        fn test_windows_onedrive_path_excluded() {
+            let path = r"C:\Users\user\OneDrive\documents\file.exe";
+            assert!(is_cloud_or_remote_path(path));
+        }
+
+        #[test]
+        fn test_windows_dropbox_path_excluded() {
+            let path = r"C:\Users\user\Dropbox\work\report.docx";
+            assert!(is_cloud_or_remote_path(path));
+        }
+
+        #[test]
+        fn test_windows_google_drive_path_excluded() {
+            let path = r"C:\Users\user\Google Drive\shared\script.ps1";
+            assert!(is_cloud_or_remote_path(path));
+        }
+
+        #[test]
+        fn test_windows_nextcloud_path_excluded() {
+            let path = r"C:\Users\user\Nextcloud\projects\app.exe";
+            assert!(is_cloud_or_remote_path(path));
+        }
+
+        #[test]
+        fn test_windows_mega_path_excluded() {
+            let path = r"C:\Users\user\MEGA\backups\archive.zip";
+            assert!(is_cloud_or_remote_path(path));
+        }
+
+        #[test]
+        fn test_windows_pcloud_path_excluded() {
+            let path = r"C:\Users\user\pCloud\photos\image.jpg";
+            assert!(is_cloud_or_remote_path(path));
+        }
+
+        #[test]
+        fn test_windows_box_path_excluded() {
+            let path = r"C:\Users\user\Box\documents\file.pdf";
+            assert!(is_cloud_or_remote_path(path));
+        }
+
+        #[test]
+        fn test_windows_regular_path_not_excluded() {
+            let path = r"C:\Users\user\Documents\work\project.exe";
+            assert!(!is_cloud_or_remote_path(path));
+        }
+
+        #[test]
+        fn test_windows_program_files_not_excluded() {
+            let path = r"C:\Program Files\Application\app.exe";
+            assert!(!is_cloud_or_remote_path(path));
+        }
+
+        #[test]
+        fn test_windows_temp_not_excluded() {
+            let path = r"C:\Windows\Temp\suspicious.exe";
+            assert!(!is_cloud_or_remote_path(path));
+        }
+
+        #[test]
+        fn test_case_insensitive_onedrive_windows() {
+            let path_mixed = r"C:\Users\user\onedrive\file.exe";
+            let path_upper = r"C:\Users\user\ONEDRIVE\file.exe";
+            assert!(is_cloud_or_remote_path(path_mixed));
             assert!(is_cloud_or_remote_path(path_upper));
         }
     }
