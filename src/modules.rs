@@ -1,6 +1,7 @@
 pub mod process_check;
 pub mod filesystem_scan;
 
+use regex::Regex;
 use yara_x::Rules;
 use std::sync::Arc;
 use crate::{ScanConfig, HashIOCCollections, FalsePositiveHashCollections, FilenameIOC, C2IOC};
@@ -14,6 +15,7 @@ pub struct ScanContext<'a> {
     pub fp_hash_collections: &'a FalsePositiveHashCollections,
     pub filename_iocs: &'a Vec<FilenameIOC>,
     pub c2_iocs: &'a [C2IOC],
+    pub exclusion_patterns: &'a Vec<Regex>,
     pub logger: &'a UnifiedLogger,
     pub scan_state: Option<Arc<ScanState>>,
     pub target_folder: &'a str,

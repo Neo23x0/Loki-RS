@@ -896,20 +896,39 @@ fn enable_ansi_support() {
     // ANSI codes work natively on Unix-like systems
 }
 
-/// Count the number of active exclusion patterns in the config file
-/// Returns the count of non-empty, non-comment lines
-fn count_exclusions(config_path: &str) -> usize {
-    match fs::read_to_string(config_path) {
-        Ok(content) => {
-            content.lines()
-                .filter(|line| {
-                    let trimmed = line.trim();
-                    !trimmed.is_empty() && !trimmed.starts_with('#')
-                })
-                .count()
+/// Load and compile exclusion patterns from the config file
+/// Returns a vector of compiled regex patterns
+fn load_exclusion_patterns(config_path: &str, logger: &UnifiedLogger) -> Vec<Regex> {
+    let mut patterns = Vec::new();
+
+    let content = match fs::read_to_string(config_path) {
+        Ok(c) => c,
+        Err(_) => return patterns, // File doesn't exist or can't be read
+    };
+
+    for (line_num, line) in content.lines().enumerate() {
+        let trimmed = line.trim();
+
+        // Skip empty lines and comments
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            continue;
         }
-        Err(_) => 0
+
+        // Try to compile the pattern
+        match Regex::new(trimmed) {
+            Ok(regex) => {
+                patterns.push(regex);
+            }
+            Err(e) => {
+                logger.warning(&format!(
+                    "Invalid exclusion pattern at {}:{} - '{}': {}",
+                    config_path, line_num + 1, trimmed, e
+                ));
+            }
+        }
     }
+
+    patterns
 }
 
 // Welcome message
@@ -1189,8 +1208,9 @@ fn main() {
         std::process::exit(1);
     }
     
-    // Count exclusions from config file
-    let exclusion_count = count_exclusions("./config/excludes.cfg");
+    // Load exclusion patterns from config file
+    let exclusion_patterns = load_exclusion_patterns("./config/excludes.cfg", &logger);
+    let exclusion_count = exclusion_patterns.len();
     
     // Get program directory to exclude it from scanning
     let program_dir = std::env::current_exe()
@@ -1403,11 +1423,12 @@ fn main() {
                      fp_hash_collections: &fp_hash_collections,
                      filename_iocs: &filename_iocs,
                      c2_iocs: &c2_iocs,
+                     exclusion_patterns: &exclusion_patterns,
                      logger: &logger,
                      scan_state: Some(scan_state.clone()),
                      target_folder: &target_folder,
                  };
-                 
+
                  let result = module.run(&context);
                  module_results.insert(module.name().to_string(), result);
             } else if module.name() == "FileScan" {
@@ -1438,11 +1459,12 @@ fn main() {
                          fp_hash_collections: &fp_hash_collections,
                          filename_iocs: &filename_iocs,
                          c2_iocs: &c2_iocs,
+                         exclusion_patterns: &exclusion_patterns,
                          logger: &logger,
                          scan_state: Some(scan_state.clone()),
                          target_folder: folder,
                      };
-                     
+
                      let (files_scanned, files_matched, alerts, warnings, notices) = module.run(&context);
                      total_files_scanned += files_scanned;
                      total_files_matched += files_matched;
@@ -1455,7 +1477,7 @@ fn main() {
                      (total_files_scanned, total_files_matched, total_alerts, total_warnings, total_notices));
             } else {
                  logger.info_w("Running module", &[("MODULE", module.name())]);
-                 
+
                  let context = ScanContext {
                      compiled_rules: &compiled_rules,
                      scan_config: &scan_config,
@@ -1463,11 +1485,12 @@ fn main() {
                      fp_hash_collections: &fp_hash_collections,
                      filename_iocs: &filename_iocs,
                      c2_iocs: &c2_iocs,
+                     exclusion_patterns: &exclusion_patterns,
                      logger: &logger,
                      scan_state: Some(scan_state.clone()),
                      target_folder: &target_folder,
                  };
-                 
+
                  let result = module.run(&context);
                  module_results.insert(module.name().to_string(), result);
             }

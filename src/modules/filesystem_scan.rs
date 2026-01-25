@@ -8,6 +8,7 @@ use filesize::PathExt;
 use file_format::FileFormat;
 use chrono::offset::Utc;
 use chrono::prelude::*;
+use regex::Regex;
 use sha2::{Sha256, Digest};
 use sha1::*;
 use memmap2::MmapOptions;
@@ -432,6 +433,7 @@ impl ScanModule for FileScanModule {
             context.hash_collections,
             context.fp_hash_collections,
             context.filename_iocs,
+            context.exclusion_patterns,
             context.logger,
             context.scan_state.as_ref()
         )
@@ -440,12 +442,13 @@ impl ScanModule for FileScanModule {
 
 // Scan a given file system path
 pub fn scan_path (
-    target_folder: &str, 
-    compiled_rules: &Rules, 
-    scan_config: &ScanConfig, 
+    target_folder: &str,
+    compiled_rules: &Rules,
+    scan_config: &ScanConfig,
     hash_collections: &HashIOCCollections,
     fp_hash_collections: &FalsePositiveHashCollections,
     filename_iocs: &Vec<FilenameIOC>,
+    exclusion_patterns: &Vec<Regex>,
     logger: &UnifiedLogger,
     scan_state: Option<&Arc<ScanState>>) -> (usize, usize, usize, usize, usize) {
     
@@ -495,12 +498,13 @@ pub fn scan_path (
                 Ok(entry) => {
                     throttle_start();
                     let result = process_file_entry(
-                        entry, 
-                        compiled_rules, 
-                        scan_config, 
-                        hash_collections, 
-                        fp_hash_collections, 
-                        filename_iocs, 
+                        entry,
+                        compiled_rules,
+                        scan_config,
+                        hash_collections,
+                        fp_hash_collections,
+                        filename_iocs,
+                        exclusion_patterns,
                         logger,
                         scan_state_ref.as_ref()
                     );
@@ -537,11 +541,12 @@ pub fn scan_path (
 
 fn process_file_entry(
     entry: DirEntry,
-    compiled_rules: &Rules, 
-    scan_config: &ScanConfig, 
+    compiled_rules: &Rules,
+    scan_config: &ScanConfig,
     hash_collections: &HashIOCCollections,
     fp_hash_collections: &FalsePositiveHashCollections,
     filename_iocs: &Vec<FilenameIOC>,
+    exclusion_patterns: &Vec<Regex>,
     logger: &UnifiedLogger,
     scan_state: Option<&Arc<ScanState>>
 ) -> (usize, usize, usize, usize, usize) {
@@ -572,7 +577,16 @@ fn process_file_entry(
             return (0, 0, 0, 0, 0);
         }
     }
-    
+
+    // Check custom exclusion patterns from config/excludes.cfg
+    for pattern in exclusion_patterns.iter() {
+        if pattern.is_match(&file_path_str) {
+            logger.debug(&format!("Skipping excluded path (config pattern) FILE: {} PATTERN: {}", file_path_str, pattern.as_str()));
+            if let Some(state) = scan_state { state.increment_skipped(); }
+            return (0, 0, 0, 0, 0);
+        }
+    }
+
     // Determine if we should exclude mounted devices
     // When scan_all_drives is true: don't exclude anything
     // When scan_hard_drives is true: we've already enumerated the right drives, so don't exclude mounted devices
@@ -1595,6 +1609,151 @@ mod tests {
             let file_path = Path::new("/usr/local/loki/config/excludes.cfg");
             let program_dir_path = Path::new(program_dir);
             assert!(file_path.starts_with(program_dir_path));
+        }
+    }
+
+    mod config_file_exclusion_tests {
+        use super::*;
+
+        fn create_test_exclusion_patterns() -> Vec<Regex> {
+            vec![
+                Regex::new(r"^/proc/.*").unwrap(),
+                Regex::new(r"^/dev/.*").unwrap(),
+                Regex::new(r".*\.tmp$").unwrap(),
+                Regex::new(r".*\.swp$").unwrap(),
+                Regex::new(r".*node_modules.*").unwrap(),
+                Regex::new(r".*/\.git/.*").unwrap(),
+                Regex::new(r"^/usr/bin/socat.*").unwrap(),
+            ]
+        }
+
+        #[test]
+        fn test_proc_path_excluded_by_config() {
+            let patterns = create_test_exclusion_patterns();
+            let path = "/proc/1234/cmdline";
+            let excluded = patterns.iter().any(|p| p.is_match(path));
+            assert!(excluded, "Path {} should be excluded by config pattern", path);
+        }
+
+        #[test]
+        fn test_dev_path_excluded_by_config() {
+            let patterns = create_test_exclusion_patterns();
+            let path = "/dev/null";
+            let excluded = patterns.iter().any(|p| p.is_match(path));
+            assert!(excluded, "Path {} should be excluded by config pattern", path);
+        }
+
+        #[test]
+        fn test_tmp_extension_excluded() {
+            let patterns = create_test_exclusion_patterns();
+            let path = "/home/user/document.tmp";
+            let excluded = patterns.iter().any(|p| p.is_match(path));
+            assert!(excluded, "Path {} should be excluded by .tmp pattern", path);
+        }
+
+        #[test]
+        fn test_swp_extension_excluded() {
+            let patterns = create_test_exclusion_patterns();
+            let path = "/home/user/.bashrc.swp";
+            let excluded = patterns.iter().any(|p| p.is_match(path));
+            assert!(excluded, "Path {} should be excluded by .swp pattern", path);
+        }
+
+        #[test]
+        fn test_node_modules_excluded() {
+            let patterns = create_test_exclusion_patterns();
+            let paths = vec![
+                "/home/user/project/node_modules/package/index.js",
+                "/var/www/app/node_modules/express/lib/express.js",
+                "/opt/app/node_modules/.bin/npm",
+            ];
+            for path in paths {
+                let excluded = patterns.iter().any(|p| p.is_match(path));
+                assert!(excluded, "Path {} should be excluded by node_modules pattern", path);
+            }
+        }
+
+        #[test]
+        fn test_git_directory_excluded() {
+            let patterns = create_test_exclusion_patterns();
+            let paths = vec![
+                "/home/user/project/.git/objects/pack/pack-abc123.idx",
+                "/var/repo/.git/config",
+                "/opt/app/.git/HEAD",
+            ];
+            for path in paths {
+                let excluded = patterns.iter().any(|p| p.is_match(path));
+                assert!(excluded, "Path {} should be excluded by .git pattern", path);
+            }
+        }
+
+        #[test]
+        fn test_socat_binary_excluded() {
+            let patterns = create_test_exclusion_patterns();
+            let paths = vec![
+                "/usr/bin/socat",
+                "/usr/bin/socat1",
+            ];
+            for path in paths {
+                let excluded = patterns.iter().any(|p| p.is_match(path));
+                assert!(excluded, "Path {} should be excluded by socat pattern", path);
+            }
+        }
+
+        #[test]
+        fn test_regular_paths_not_excluded() {
+            let patterns = create_test_exclusion_patterns();
+            let paths = vec![
+                "/home/user/documents/report.pdf",
+                "/usr/local/bin/python3",
+                "/opt/application/app.exe",
+                "/var/log/syslog",
+                "/etc/passwd",
+            ];
+            for path in paths {
+                let excluded = patterns.iter().any(|p| p.is_match(path));
+                assert!(!excluded, "Path {} should NOT be excluded", path);
+            }
+        }
+
+        #[test]
+        fn test_empty_patterns_excludes_nothing() {
+            let patterns: Vec<Regex> = Vec::new();
+            let path = "/proc/1234/cmdline";
+            let excluded = patterns.iter().any(|p| p.is_match(path));
+            assert!(!excluded, "Empty pattern list should not exclude anything");
+        }
+
+        #[test]
+        fn test_pattern_case_sensitive() {
+            let patterns = vec![
+                Regex::new(r".*\.TMP$").unwrap(), // uppercase
+            ];
+            let path_lower = "/home/user/file.tmp";
+            let path_upper = "/home/user/file.TMP";
+
+            let excluded_lower = patterns.iter().any(|p| p.is_match(path_lower));
+            let excluded_upper = patterns.iter().any(|p| p.is_match(path_upper));
+
+            assert!(!excluded_lower, "Lowercase .tmp should NOT match uppercase .TMP pattern");
+            assert!(excluded_upper, "Uppercase .TMP should match uppercase .TMP pattern");
+        }
+
+        #[test]
+        fn test_case_insensitive_pattern() {
+            let patterns = vec![
+                Regex::new(r"(?i).*\.tmp$").unwrap(), // case-insensitive
+            ];
+            let paths = vec![
+                "/home/user/file.tmp",
+                "/home/user/file.TMP",
+                "/home/user/file.Tmp",
+            ];
+
+            for path in paths {
+                let excluded = patterns.iter().any(|p| p.is_match(path));
+                assert!(excluded, "Path {} should be excluded by case-insensitive pattern", path);
+            }
         }
     }
 }
