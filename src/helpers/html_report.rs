@@ -2078,6 +2078,13 @@ fn syntax_highlight_json(json: &str) -> String {
             ':' if !in_string => {
                 result.push(c);
             }
+            '\\' if in_string => {
+                // Handle escape sequences - consume the backslash and the next character
+                current_token.push(c);
+                if let Some(next) = chars.next() {
+                    current_token.push(next);
+                }
+            }
             c if in_string => {
                 current_token.push(c);
             }
@@ -2216,6 +2223,26 @@ mod tests {
     fn test_truncate_string() {
         assert_eq!(truncate_string("hello", 10), "hello");
         assert_eq!(truncate_string("hello world", 5), "hello...");
+    }
+
+    #[test]
+    fn test_syntax_highlight_json_escaped_quotes() {
+        // Test that escaped quotes inside strings are handled correctly
+        let json = r#"{"key": "value with \"quotes\""}"#;
+        let result = syntax_highlight_json(json);
+        // The escaped quotes should remain inside the string, not break it
+        assert!(result.contains("value with"));
+        assert!(result.contains("quotes"));
+    }
+
+    #[test]
+    fn test_syntax_highlight_json_script_tag_escaped() {
+        // Ensure <script> tags in JSON content are properly HTML-escaped
+        let json = r#"{"match": "<script language=\"JScript\">"}"#;
+        let result = syntax_highlight_json(json);
+        // The <script> should be escaped to &lt;script&gt;
+        assert!(result.contains("&lt;script"));
+        assert!(!result.contains("<script language"));
     }
 }
 
