@@ -56,7 +56,7 @@ use netstat2::{get_sockets_info, AddressFamilyFlags, ProtocolFlags};
 use crate::{ScanConfig, GenMatch, C2IOC, check_c2_match, FilenameIOC, HashIOCCollections, find_hash_ioc};
 use crate::helpers::score::calculate_weighted_score;
 use crate::helpers::unified_logger::{UnifiedLogger, MatchReason, LogLevel};
-use crate::helpers::throttler::{init_thread_throttler, throttle_start, throttle_end_with_limit};
+use crate::helpers::throttler::{throttle_start, throttle_end_with_limit};
 use crate::helpers::interrupt::ScanState;
 
 use crate::modules::{ScanModule, ScanContext, ModuleResult};
@@ -152,7 +152,6 @@ pub fn scan_processes(
             true
         })
         .map(|(pid, process)| {
-            init_thread_throttler(cpu_limit);
             throttle_start();
             let result = process_single_process(
                 pid, 

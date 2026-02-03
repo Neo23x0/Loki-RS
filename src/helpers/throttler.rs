@@ -29,9 +29,8 @@ impl CpuThrottler {
     }
 
     pub fn start_work(&mut self) {
-        if self.target_percent >= 100 {
-            return;
-        }
+        // Always record start time - the target check happens in end_work_and_throttle()
+        // This allows dynamic CPU limit adjustments to take effect immediately
         self.work_start = Some(Instant::now());
     }
 
@@ -65,6 +64,7 @@ impl CpuThrottler {
     }
 }
 
+#[allow(dead_code)]
 pub fn init_thread_throttler(target_percent: u8) {
     THROTTLER.with(|t| {
         t.borrow_mut().set_target(target_percent);

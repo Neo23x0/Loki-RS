@@ -41,7 +41,7 @@ const DRIVE_RAMDISK: u32 = 6;
 use crate::{ScanConfig, GenMatch, HashIOCCollections, FalsePositiveHashCollections, ExtVars, YaraMatch, FilenameIOC, find_hash_ioc};
 use crate::helpers::score::calculate_weighted_score;
 use crate::helpers::unified_logger::{UnifiedLogger, MatchReason, LogLevel};
-use crate::helpers::throttler::{init_thread_throttler, throttle_start, throttle_end_with_limit};
+use crate::helpers::throttler::{throttle_start, throttle_end_with_limit};
 use crate::helpers::helpers::log_access_error;
 use crate::helpers::interrupt::ScanState;
 
@@ -493,7 +493,6 @@ pub fn scan_path (
     // Process files in parallel
     let (files_scanned, files_matched, alert_count, warning_count, notice_count) = walk.par_bridge()
         .map(|entry_res| {
-            init_thread_throttler(cpu_limit);
             match entry_res {
                 Ok(entry) => {
                     throttle_start();
