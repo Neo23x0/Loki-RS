@@ -972,4 +972,3 @@ fn run_main_loop(
         }
     }
 }
-
