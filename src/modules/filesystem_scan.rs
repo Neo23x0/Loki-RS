@@ -66,52 +66,25 @@ const ALL_DRIVE_EXCLUDES: &'static [&'static str] = &[
     "/Volumes/"
 ];
 
-// Windows cloud storage paths
-const WINDOWS_CLOUD_PATHS: &[&str] = &[
-    "\\OneDrive",
-    "\\Dropbox", 
-    "\\Google Drive",
-    "\\iCloudDrive",
-    "\\Box",
-    "\\Nextcloud",
-    "\\Tresorit",
-    "\\TresoritDrive",
-    "\\Tresors",
-    "\\pCloud",
-    "\\MEGA",
-    "\\Sync",
-    "\\SpiderOak Hive",
-    "\\Egnyte",
-    "\\ShareFile",
-    "\\Syncplicity Folders",
-    "\\Seafile",
-    "\\Resilio Sync",
-    "\\Syncthing",
-    "\\ownCloud",
-];
-
-// Unix cloud storage paths (in addition to existing ALL_DRIVE_EXCLUDES)
-const UNIX_CLOUD_PATHS: &[&str] = &[
-    "/OneDrive",
-    "/Dropbox",
-    "/.dropbox",
-    "/Google Drive",
-    "/Box",
-    "/Nextcloud",
-    "/Tresorit",
-    "/TresoritDrive",
-    "/Tresors",
-    "/pCloud",
-    "/MEGA",
-    "/MEGAsync",
-    "/Sync",
-    "/SpiderOak Hive",
-    "/Seafile",
-    "/Resilio Sync",
-    "/Syncthing",
-    "/ownCloud",
-    "/Koofr",
-    "/Icedrive",
+// Cloud storage root folder segment allowlist.
+// Matching is done on normalized path segments (not substring matches).
+const CLOUD_ROOT_SEGMENTS: &[&str] = &[
+    // Cross-platform common roots
+    "onedrive",
+    "dropbox",
+    ".dropbox",
+    "google drive",
+    "googledrive",
+    "icloud drive",
+    "box",
+    "box-box",
+    "mega",
+    "megasync",
+    "nextcloud",
+    "owncloud",
+    "tresorit",
+    "tresorit drive",
+    "syncthing",
 ];
 
 // Linux/Mac path exclusions (start of path)
@@ -152,24 +125,37 @@ struct SampleInfo {
 
 // Check if a path is likely a cloud storage folder
 fn is_cloud_or_remote_path(path: &str) -> bool {
-    let path_lower = path.to_lowercase();
-    
-    // Windows checks
-    if cfg!(windows) {
-        for cloud_path in WINDOWS_CLOUD_PATHS {
-            if path_lower.contains(&cloud_path.to_lowercase()) {
-                return true;
-            }
-        }
-    } else {
-        // Unix checks
-        for cloud_path in UNIX_CLOUD_PATHS {
-            if path_lower.contains(&cloud_path.to_lowercase()) {
-                return true;
-            }
-        }
+    let path_lower = path.replace('\\', "/").to_lowercase();
+    let segments: Vec<&str> = path_lower.split('/').filter(|s| !s.is_empty()).collect();
+
+    // Direct segment matches (no substring matches)
+    if segments
+        .iter()
+        .any(|segment| CLOUD_ROOT_SEGMENTS.contains(segment))
+    {
+        return true;
     }
-    
+
+    // Dynamic provider segment patterns:
+    // - OneDrive - <OrgName> (Windows)
+    // - OneDrive-<TenantName> (macOS File Provider style)
+    // - Nextcloud-<accountName> (macOS Virtual Files domains)
+    if segments.iter().any(|segment| {
+        segment.starts_with("onedrive - ")
+            || segment.starts_with("onedrive-")
+            || segment.starts_with("nextcloud-")
+    }) {
+        return true;
+    }
+
+    // macOS CloudStorage root marker: ~/Library/CloudStorage/*
+    if segments
+        .windows(2)
+        .any(|pair| pair[0] == "library" && pair[1] == "cloudstorage")
+    {
+        return true;
+    }
+
     false
 }
 
@@ -1294,13 +1280,13 @@ mod tests {
         #[test]
         fn test_unix_pcloud_path_excluded() {
             let path = "/home/user/pCloud/photos/image.jpg";
-            assert!(is_cloud_or_remote_path(path));
+            assert!(!is_cloud_or_remote_path(path));
         }
 
         #[test]
         fn test_unix_seafile_path_excluded() {
             let path = "/home/user/Seafile/library/document.docx";
-            assert!(is_cloud_or_remote_path(path));
+            assert!(!is_cloud_or_remote_path(path));
         }
 
         #[test]
@@ -1318,7 +1304,7 @@ mod tests {
         #[test]
         fn test_unix_resilio_sync_path_excluded() {
             let path = "/home/user/Resilio Sync/shared/file.exe";
-            assert!(is_cloud_or_remote_path(path));
+            assert!(!is_cloud_or_remote_path(path));
         }
 
         #[test]
@@ -1362,6 +1348,42 @@ mod tests {
             let path_upper = "/home/user/ONEDRIVE/file.exe";
             assert!(is_cloud_or_remote_path(path_lower));
             assert!(is_cloud_or_remote_path(path_upper));
+        }
+
+        #[test]
+        fn test_dynamic_onedrive_org_segment_excluded() {
+            let path = "/home/user/OneDrive - Acme Corp/docs/file.exe";
+            assert!(is_cloud_or_remote_path(path));
+        }
+
+        #[test]
+        fn test_dynamic_onedrive_tenant_segment_excluded() {
+            let path = "/Users/user/Library/CloudStorage/OneDrive-Contoso/file.exe";
+            assert!(is_cloud_or_remote_path(path));
+        }
+
+        #[test]
+        fn test_dynamic_nextcloud_account_segment_excluded() {
+            let path = "/Users/user/Library/CloudStorage/Nextcloud-john@example.com/file.exe";
+            assert!(is_cloud_or_remote_path(path));
+        }
+
+        #[test]
+        fn test_cloudstorage_parent_segments_excluded() {
+            let path = "/Users/user/Library/CloudStorage/UnknownProvider/file.exe";
+            assert!(is_cloud_or_remote_path(path));
+        }
+
+        #[test]
+        fn test_no_substring_match_sync_segment() {
+            let path = "/home/user/projects/sync-tools/sample.exe";
+            assert!(!is_cloud_or_remote_path(path));
+        }
+
+        #[test]
+        fn test_no_substring_match_mega_segment() {
+            let path = "/home/user/projects/megatest/sample.exe";
+            assert!(!is_cloud_or_remote_path(path));
         }
     }
 
