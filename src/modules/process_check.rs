@@ -703,24 +703,23 @@ fn read_process_memory(pid: u32) -> Vec<u8> {
                    (mem_info.Protect.0 & windows::Win32::System::Memory::PAGE_NOACCESS.0) == 0 &&
                    (mem_info.Protect.0 & windows::Win32::System::Memory::PAGE_GUARD.0) == 0 {
                     
-                    let mut chunk = vec![0u8; mem_info.RegionSize];
+                    let remaining = max_buffer_size - buffer.len();
+                    let chunk_size = std::cmp::min(mem_info.RegionSize, remaining);
+                    if chunk_size == 0 {
+                        break;
+                    }
+
+                    let mut chunk = vec![0u8; chunk_size];
                     let mut bytes_read: usize = 0;
                     
                     if ReadProcessMemory(
                         handle, 
                         mem_info.BaseAddress, 
                         chunk.as_mut_ptr() as *mut c_void, 
-                        mem_info.RegionSize, 
+                        chunk_size, 
                         Some(&mut bytes_read)
                     ).is_ok() {
                         chunk.truncate(bytes_read);
-                        
-                        // Enforce remaining limit
-                        let remaining = max_buffer_size - buffer.len();
-                        if chunk.len() > remaining {
-                            chunk.truncate(remaining);
-                        }
-                        
                         buffer.extend_from_slice(&chunk);
                     }
                 }
