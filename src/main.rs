@@ -2404,6 +2404,14 @@ mod tests {
                         assert!(expected_match, "Path {} should match", path);
 
                         let is_fp = fioc.regex_fp.as_ref().map_or(false, |fp| fp.is_match(path));
+                        assert_eq!(
+                            is_fp,
+                            expected_fp,
+                            "Path {} should have false-positive state={}, but was {}",
+                            path,
+                            expected_fp,
+                            is_fp
+                        );
 
                         if !is_fp {
                             reported = true;
