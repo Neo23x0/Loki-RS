@@ -124,6 +124,13 @@ jobs:
             artifact_name: loki-windows-x86_64
             binary_name: loki.exe
             archive_format: zip
+
+          # Windows ARM64
+          - os: windows-latest
+            target: aarch64-pc-windows-msvc
+            artifact_name: loki-windows-aarch64
+            binary_name: loki.exe
+            archive_format: zip
           
           # macOS x86_64
           - os: macos-latest
@@ -299,6 +306,10 @@ jobs:
             **Windows (x86_64)**
             - Binary: `loki-windows-x86_64-${{ steps.version.outputs.VERSION }}.zip`
             - Checksum: `loki-windows-x86_64-${{ steps.version.outputs.VERSION }}.zip.sha256`
+
+            **Windows (ARM64)**
+            - Binary: `loki-windows-aarch64-${{ steps.version.outputs.VERSION }}.zip`
+            - Checksum: `loki-windows-aarch64-${{ steps.version.outputs.VERSION }}.zip.sha256`
             
             **macOS (x86_64)**
             - Binary: `loki-macos-x86_64-${{ steps.version.outputs.VERSION }}.tar.gz`

@@ -112,6 +112,9 @@ cargo install cargo-audit
    ```bash
    # Add target for Windows (x86_64)
    rustup target add x86_64-pc-windows-gnu
+
+   # Add target for Windows (ARM64)
+   rustup target add aarch64-pc-windows-msvc
    
    # Add target for macOS (x86_64)
    rustup target add x86_64-apple-darwin
@@ -156,6 +159,9 @@ cargo install cargo-audit
 # Build for Windows (from Linux)
 cargo build --release --target x86_64-pc-windows-gnu
 
+# Build for Windows ARM64 (from Windows)
+cargo build --release --target aarch64-pc-windows-msvc
+
 # Build for macOS x86_64 (from macOS)
 cargo build --release --target x86_64-apple-darwin
 
@@ -168,7 +174,8 @@ cargo build --release --target aarch64-unknown-linux-gnu
 
 ### Cross-Compilation Notes
 
-- **Windows**: Requires `mingw-w64` toolchain. Some crates may have issues with Windows-specific features.
+- **Windows x86_64 (`x86_64-pc-windows-gnu`)**: Requires `mingw-w64` toolchain.
+- **Windows ARM64 (`aarch64-pc-windows-msvc`)**: Build on Windows with Visual Studio C++ build tools (MSVC/ARM64 libraries).
 - **macOS**: Cross-compilation from Linux is complex. Best done on macOS itself or using CI/CD.
 - **ARM**: Requires appropriate cross-compiler toolchain.
 
