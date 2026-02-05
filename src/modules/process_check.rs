@@ -41,7 +41,7 @@ use sha1::Sha1;
 use sha2::{Sha256, Digest};
 
 #[cfg(target_os = "windows")]
-use windows::Win32::Foundation::{CloseHandle, FALSE};
+use windows::Win32::Foundation::{CloseHandle};
 #[cfg(target_os = "windows")]
 use windows::Win32::System::Threading::{OpenProcess, PROCESS_QUERY_INFORMATION, PROCESS_VM_READ};
 #[cfg(target_os = "windows")]
@@ -675,7 +675,7 @@ fn read_process_memory(pid: u32) -> Vec<u8> {
     unsafe {
         let handle = OpenProcess(
             PROCESS_QUERY_INFORMATION | PROCESS_VM_READ, 
-            FALSE, 
+            false, 
             pid
         );
         
