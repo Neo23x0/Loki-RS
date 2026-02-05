@@ -667,11 +667,11 @@ fn render_status_bar(frame: &mut Frame, app: &TuiApp, area: Rect) {
     
     // Build status indicators
     let pause_indicator = if app.scan_complete {
-        Span::styled(" ✓ DONE ", Style::default().fg(Color::Black).bg(Color::Green).add_modifier(Modifier::BOLD))
+        Span::styled(" [DONE] ", Style::default().fg(Color::Black).bg(Color::Green).add_modifier(Modifier::BOLD))
     } else if is_paused {
-        Span::styled(" ⏸ PAUSED ", Style::default().fg(Color::Black).bg(Color::Yellow).add_modifier(Modifier::BOLD))
+        Span::styled(" [PAUSED] ", Style::default().fg(Color::Black).bg(Color::Yellow).add_modifier(Modifier::BOLD))
     } else {
-        Span::styled(" ▶ ", Style::default().fg(Color::Green))
+        Span::styled(" [RUN] ", Style::default().fg(Color::Green))
     };
     
     let status_text = vec![
@@ -679,21 +679,21 @@ fn render_status_bar(frame: &mut Frame, app: &TuiApp, area: Rect) {
             pause_indicator,
             Span::styled("Files: ", Style::default().fg(Color::Cyan)),
             Span::styled(format_number(files), Style::default().fg(Color::White)),
-            Span::styled(" │ Procs: ", Style::default().fg(Color::Cyan)),
+            Span::styled(" | Procs: ", Style::default().fg(Color::Cyan)),
             Span::styled(format_number(procs), Style::default().fg(Color::White)),
-            Span::styled(" │ ", Style::default().fg(Color::DarkGray)),
+            Span::styled(" | ", Style::default().fg(Color::DarkGray)),
             Span::styled("A:", Style::default().fg(Color::Red)),
             Span::styled(alerts.to_string(), Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)),
             Span::styled(" W:", Style::default().fg(Color::Yellow)),
             Span::styled(warnings.to_string(), Style::default().fg(Color::Yellow)),
             Span::styled(" N:", Style::default().fg(Color::Cyan)),
             Span::styled(notices.to_string(), Style::default().fg(Color::Cyan)),
-            Span::styled(" │ ", Style::default().fg(Color::DarkGray)),
+            Span::styled(" | ", Style::default().fg(Color::DarkGray)),
             Span::styled(format!("{:02}:{:02}:{:02}", hours, mins, secs), Style::default().fg(Color::Green)),
-            Span::styled(" │ ", Style::default().fg(Color::DarkGray)),
+            Span::styled(" | ", Style::default().fg(Color::DarkGray)),
             Span::styled(format!("CPU:{}% ", current_cpu_limit), Style::default().fg(Color::White)),
             Span::styled("[+/-]", Style::default().fg(Color::DarkGray)),
-            Span::styled(" │ ", Style::default().fg(Color::DarkGray)),
+            Span::styled(" | ", Style::default().fg(Color::DarkGray)),
             Span::styled("[p]ause [s]kip [t]hreads [q]uit", Style::default().fg(Color::DarkGray)),
         ]),
     ];
@@ -750,7 +750,7 @@ fn render_quit_dialog(frame: &mut Frame, area: Rect) {
 
 fn render_loading_overlay(frame: &mut Frame, app: &TuiApp, area: Rect) {
     // Spinner characters for animation
-    const SPINNER: &[char] = &['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+    const SPINNER: &[char] = &['|', '/', '-', '\\'];
     let spinner_char = SPINNER[app.spinner_frame % SPINNER.len()];
     
     // Center the loading overlay
@@ -813,9 +813,9 @@ fn render_threads_overlay(frame: &mut Frame, app: &TuiApp, area: Rect) {
     
     // Build title with status
     let title_status = if is_paused {
-        Span::styled(" ⏸ PAUSED ", Style::default().fg(Color::Black).bg(Color::Yellow).add_modifier(Modifier::BOLD))
+        Span::styled(" [PAUSED] ", Style::default().fg(Color::Black).bg(Color::Yellow).add_modifier(Modifier::BOLD))
     } else {
-        Span::styled(" ▶ SCANNING ", Style::default().fg(Color::Black).bg(Color::Green).add_modifier(Modifier::BOLD))
+        Span::styled(" [SCANNING] ", Style::default().fg(Color::Black).bg(Color::Green).add_modifier(Modifier::BOLD))
     };
     
     let title = Line::from(vec![
