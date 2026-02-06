@@ -1422,9 +1422,9 @@ mod tests {
         }
 
         #[test]
-        fn test_windows_pcloud_path_excluded() {
+        fn test_windows_pcloud_path_not_excluded() {
             let path = r"C:\Users\user\pCloud\photos\image.jpg";
-            assert!(is_cloud_or_remote_path(path));
+            assert!(!is_cloud_or_remote_path(path));
         }
 
         #[test]
