@@ -2,9 +2,5 @@
 rustflags = ["-C", "target-feature=+crt-static"]
 
 [target.x86_64-pc-windows-gnu]
-linker = "/opt/homebrew/opt/mingw-w64/bin/x86_64-w64-mingw32-gcc"
-ar = "/opt/homebrew/opt/mingw-w64/bin/x86_64-w64-mingw32-ar"
-
-[env]
-CC_x86_64_pc_windows_gnu = "/opt/homebrew/opt/mingw-w64/bin/x86_64-w64-mingw32-gcc"
-CXX_x86_64_pc_windows_gnu = "/opt/homebrew/opt/mingw-w64/bin/x86_64-w64-mingw32-g++"
+linker = "x86_64-w64-mingw32-gcc"
+ar = "x86_64-w64-mingw32-ar"
