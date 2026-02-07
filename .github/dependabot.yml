@@ -18,21 +18,16 @@ updates:
         patterns:
           - "*"
         applies-to: security-updates
-    schedule:
-      interval: daily
-  - package-ecosystem: cargo
-    directory: /
-    groups:
       low-prio:
         patterns:
-          - "*"  # Group all Actions updates into a single larger pull request
+          - "*"  # Group all cargo updates into a single larger pull request
         applies-to: version-updates
         update-types:
           - "patch"
           - "minor"
       high-priority:
         patterns:
-          - "*"  # Group all Actions updates into a single larger pull request
+          - "*"
         applies-to: version-updates
         update-types:
           - "major"
