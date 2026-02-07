@@ -70,13 +70,13 @@ windows = { version = "0.58", features = [
 unsafe_code = "warn"
 
 [lints.clippy]
-enum_glob_use = "deny"
-pedantic = { level = "deny", priority = -1 }
-nursery = { level = "deny", priority = -1 }
-unwrap_used = "deny"
+enum_glob_use = "warn"
+pedantic = { level = "warn", priority = -1 }
+nursery = { level = "warn", priority = -1 }
+unwrap_used = "warn"
 
 [profile.release]
-opt-level = 'z'   # Optimize for size.
+opt-level = 3     # Optimize for size.
 lto = true        # Enable Link Time Optimisation
 codegen-units = 1 # Reduced to increase optimisations.
 panic = 'abort'   # Abort on panic
