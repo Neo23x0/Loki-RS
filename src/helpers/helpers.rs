@@ -1,4 +1,5 @@
 use std::env;
+#[cfg(not(all(windows, target_arch = "aarch64")))]
 use std::net::IpAddr;
 use human_bytes::human_bytes;
 use sysinfo::{System, Disks};
@@ -28,33 +29,7 @@ pub fn evaluate_env(logger: &UnifiedLogger) {
         human_bytes((sys.total_memory() - sys.used_memory()) as f64)));
     
     // Network interfaces and IP addresses
-    // Note: We use get_if_addrs directly as sysinfo::Networks uses different interface
-    // naming conventions on Windows, causing cross-library name matching to fail
-    let mut ip_addresses: Vec<String> = Vec::new();
-    
-    if let Ok(interfaces) = get_if_addrs::get_if_addrs() {
-        for iface in interfaces {
-            let ip = iface.addr.ip();
-            // Skip loopback IPs
-            if ip.is_loopback() {
-                continue;
-            }
-            
-            // Skip common virtual interface prefixes
-            let name_lower = iface.name.to_lowercase();
-            if name_lower.contains("loopback") || name_lower == "lo" {
-                continue;
-            }
-            
-            let ip_str = match ip {
-                IpAddr::V4(v4) => format!("{}: {} (IPv4)", iface.name, v4),
-                IpAddr::V6(v6) => format!("{}: {} (IPv6)", iface.name, v6),
-            };
-            if !ip_addresses.contains(&ip_str) {
-                ip_addresses.push(ip_str);
-            }
-        }
-    }
+    let ip_addresses = collect_ip_addresses();
     
     if ip_addresses.is_empty() {
         // Fallback: just list the interfaces without IPs
@@ -83,6 +58,45 @@ pub fn evaluate_env(logger: &UnifiedLogger) {
             usage_percent,
         ));
     }
+}
+
+#[cfg(not(all(windows, target_arch = "aarch64")))]
+fn collect_ip_addresses() -> Vec<String> {
+    // Note: We use get_if_addrs directly as sysinfo::Networks uses different interface
+    // naming conventions on Windows, causing cross-library name matching to fail
+    let mut ip_addresses: Vec<String> = Vec::new();
+    
+    if let Ok(interfaces) = get_if_addrs::get_if_addrs() {
+        for iface in interfaces {
+            let ip = iface.addr.ip();
+            // Skip loopback IPs
+            if ip.is_loopback() {
+                continue;
+            }
+            
+            // Skip common virtual interface prefixes
+            let name_lower = iface.name.to_lowercase();
+            if name_lower.contains("loopback") || name_lower == "lo" {
+                continue;
+            }
+            
+            let ip_str = match ip {
+                IpAddr::V4(v4) => format!("{}: {} (IPv4)", iface.name, v4),
+                IpAddr::V6(v6) => format!("{}: {} (IPv6)", iface.name, v6),
+            };
+            if !ip_addresses.contains(&ip_str) {
+                ip_addresses.push(ip_str);
+            }
+        }
+    }
+    
+    ip_addresses
+}
+
+#[cfg(all(windows, target_arch = "aarch64"))]
+fn collect_ip_addresses() -> Vec<String> {
+    // get_if_addrs depends on winapi 0.2.x, which does not support Windows ARM64.
+    Vec::new()
 }
 
 pub fn get_hostname() -> String {
