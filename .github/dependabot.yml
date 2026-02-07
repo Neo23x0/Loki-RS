@@ -11,3 +11,30 @@ updates:
           - "*"  # Group all Actions updates into a single larger pull request
     schedule:
       interval: weekly
+  - package-ecosystem: cargo
+    directory: /
+    groups:
+      security:
+        patterns:
+          - "*"
+        applies-to: security-updates
+      low-prio:
+        patterns:
+          - "*"  # Group all cargo updates into a single larger pull request
+        applies-to: version-updates
+        update-types:
+          - "patch"
+          - "minor"
+      high-priority:
+        patterns:
+          - "*"
+        applies-to: version-updates
+        update-types:
+          - "major"
+    cooldown:
+      default-days: 30
+      semver-major-days: 90
+      semver-minor-days: 60
+      semver-patch-days: 30
+    schedule:
+      interval: weekly
