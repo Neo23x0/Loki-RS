@@ -247,7 +247,11 @@ fn download_and_extract_iocs() -> Result<(), Box<dyn std::error::Error>> {
     fs::create_dir_all(&extract_dir)?;
     
     let status = Command::new("tar")
-        .args(&["-xzf", tar_path.to_str().unwrap(), "-C", extract_dir.to_str().unwrap(), "--strip-components=1"])
+        .arg("-xzf")
+        .arg(tar_path)
+        .arg("-C")
+        .arg(&extract_dir)
+        .arg("--strip-components=1")
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .status()?;
@@ -376,7 +380,10 @@ fn extract_zip(zip_path: &Path, dest_dir: &Path) -> Result<(), Box<dyn std::erro
 
 fn extract_tar_gz(tar_path: &Path, dest_dir: &Path) -> Result<(), Box<dyn std::error::Error>> {
     let status = Command::new("tar")
-        .args(&["-xzf", tar_path.to_str().unwrap(), "-C", dest_dir.to_str().unwrap()])
+        .arg("-xzf")
+        .arg(tar_path)
+        .arg("-C")
+        .arg(dest_dir)
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .status()?;

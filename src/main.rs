@@ -800,7 +800,10 @@ fn initialize_yara_rules(logger: &UnifiedLogger) -> Result<(Rules, usize), Strin
         .into_iter();
     // Test compile each rule
     for file in filtered_files {
-        logger.debug(&format!("Reading YARA rule file {} ...", file.path().to_str().unwrap()));
+        logger.debug(&format!(
+            "Reading YARA rule file {} ...",
+            file.path().to_string_lossy()
+        ));
         // Read the rule file
         let rules_string = match fs::read_to_string(file.path()) {
             Ok(content) => content,
@@ -812,13 +815,20 @@ fn initialize_yara_rules(logger: &UnifiedLogger) -> Result<(Rules, usize), Strin
         let compiled_file_result = compile_yara_rules(&rules_string);
         match compiled_file_result {
             Ok(_) => { 
-                logger.debug(&format!("Successfully compiled rule file {:?} - adding it to the big set", file.path().to_str().unwrap()));
+                logger.debug(&format!(
+                    "Successfully compiled rule file {} - adding it to the big set",
+                    file.path().to_string_lossy()
+                ));
                 // adding content of that file to the whole rules string
                 all_rules += &rules_string;
                 count += 1;
             },
             Err(e) => {
-                logger.error(&format!("Cannot compile rule file {:?}. Ignoring file. ERROR: {:?}", file.path().to_str().unwrap(), e))                
+                logger.error(&format!(
+                    "Cannot compile rule file {}. Ignoring file. ERROR: {:?}",
+                    file.path().to_string_lossy(),
+                    e
+                ))
             }
         };
     }
@@ -1292,7 +1302,7 @@ fn main() {
         logger.info("Scanned file types: Executable, DLL, ISO, ZIP, LNK, CHM, PCAP and more (use --scan-all-files to scan all)");
     }
     if !scan_config.scan_all_drives {
-        logger.info("Excluded paths: /proc, /dev, /sys/kernel, /media, /volumes, /Volumes, CloudStorage (use --scan-all-drives to include)");
+        logger.info("Excluded paths: /proc, /dev, /sys, /run, /media, /volumes, /Volumes, CloudStorage (use --scan-all-drives to include)");
     }
     if scan_config.exclusion_count > 0 {
         logger.info(&format!("Custom exclusions: {} patterns loaded from ./config/excludes.cfg", scan_config.exclusion_count));
