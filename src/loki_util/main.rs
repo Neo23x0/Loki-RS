@@ -220,10 +220,10 @@ fn update_signatures() -> Result<(), Box<dyn std::error::Error>> {
 
 fn download_file(url: &str, output_path: &Path) -> Result<(), Box<dyn std::error::Error>> {
     let resp = ureq::get(url)
-        .set("User-Agent", "loki-util")
+        .header("User-Agent", "loki-util")
         .call()?;
     
-    let mut reader = resp.into_reader();
+    let mut reader = resp.into_body().into_reader();
     let mut file = fs::File::create(output_path)?;
     io::copy(&mut reader, &mut file)?;
     
@@ -231,10 +231,10 @@ fn download_file(url: &str, output_path: &Path) -> Result<(), Box<dyn std::error
 }
 
 fn fetch_url_content(url: &str) -> Result<String, Box<dyn std::error::Error>> {
-    let body = ureq::get(url)
-        .set("User-Agent", "loki-util")
-        .call()?
-        .into_string()?;
+    let mut resp = ureq::get(url)
+        .header("User-Agent", "loki-util")
+        .call()?;
+    let body = resp.body_mut().read_to_string()?;
     Ok(body)
 }
 
