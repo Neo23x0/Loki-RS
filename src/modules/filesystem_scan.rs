@@ -91,6 +91,8 @@ const CLOUD_ROOT_SEGMENTS: &[&str] = &[
 const LINUX_PATH_SKIPS_START: &'static [&'static str] = &[
     "/proc",
     "/dev",
+    "/sys",
+    "/run",
     "/sys/kernel/debug",
     "/sys/kernel/slab",
     "/sys/kernel/tracing",
@@ -183,11 +185,44 @@ fn is_network_drive(_path: &str) -> bool {
 }
 
 // Check if a filesystem type is a network filesystem (Linux/macOS)
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 fn is_network_filesystem(fs_type: &str) -> bool {
     let fs_lower = fs_type.to_lowercase();
     matches!(
         fs_lower.as_str(),
         "nfs" | "nfs4" | "cifs" | "smbfs" | "smb3" | "sshfs" | "fuse.sshfs" | "afp" | "webdav" | "davfs2"
+    )
+}
+
+#[cfg(target_os = "linux")]
+fn is_special_linux_filesystem(fs_type: &str) -> bool {
+    matches!(
+        fs_type,
+        "proc"
+            | "procfs"
+            | "sysfs"
+            | "devtmpfs"
+            | "devpts"
+            | "tmpfs"
+            | "cgroup"
+            | "cgroup2"
+            | "pstore"
+            | "bpf"
+            | "tracefs"
+            | "debugfs"
+            | "securityfs"
+            | "hugetlbfs"
+            | "mqueue"
+            | "overlay"
+            | "autofs"
+            | "fusectl"
+            | "rpc_pipefs"
+            | "nsfs"
+            | "configfs"
+            | "binfmt_misc"
+            | "selinuxfs"
+            | "efivarfs"
+            | "ramfs"
     )
 }
 
@@ -256,10 +291,7 @@ pub fn enumerate_linux_mounts(scan_hard_drives: bool, scan_all_drives: bool) -> 
             let fs_type = parts[2];
             
             // Skip special filesystems
-            let special_fs = matches!(
-                fs_type,
-                "proc" | "sysfs" | "devtmpfs" | "devpts" | "tmpfs" | "cgroup" | "cgroup2" | "pstore" | "bpf" | "tracefs" | "debugfs" | "securityfs" | "hugetlbfs" | "mqueue" | "overlay" | "autofs"
-            );
+            let special_fs = is_special_linux_filesystem(fs_type);
             
             if special_fs {
                 continue;
@@ -552,6 +584,14 @@ fn process_file_entry(
         state.set_current_element(file_path_str.to_string());
         state.increment_files();
     }
+
+    // Never scan symlink/reparse-point entries. This avoids following links
+    // into excluded or slow/unavailable locations.
+    if entry.path_is_symlink() {
+        logger.debug(&format!("Skipping symbolic link/reparse point FILE: {}", file_path_str));
+        if let Some(state) = scan_state { state.increment_skipped(); }
+        return (0, 0, 0, 0, 0);
+    }
     
     // Always exclude the program's own directory to prevent scanning itself
     if let Some(ref program_dir) = scan_config.program_dir {
@@ -622,7 +662,7 @@ fn process_file_entry(
     }
     
     // Skip all elements that aren't files (directories, symlinks, etc.)
-    if !entry.path().is_file() { 
+    if !entry.file_type().is_file() {
         logger.debug(&format!("Skipped element that isn't a file ELEMENT: {}", entry.path().display()));
         // Don't count directories as skipped - only files
         return (0, 0, 0, 0, 0);
@@ -645,7 +685,10 @@ fn process_file_entry(
     }
     
     // Type detection
-    let extension_raw = entry.path().extension().unwrap_or_default().to_str().unwrap_or("");
+    let extension_raw = entry.path()
+        .extension()
+        .map(|ext| ext.to_string_lossy().to_string())
+        .unwrap_or_default();
     let file_format = FileFormat::from_file(entry.path()).unwrap_or_default();
     let _file_format_desc = file_format.name(); 
     let file_type_long = file_format.to_owned().to_string(); 
@@ -691,7 +734,7 @@ fn process_file_entry(
     let (s, m, a, w, n) = scan_memory_buffer(
         &mmap, &file_path_str, 
         entry.path().file_name().map(|n| n.to_string_lossy()).unwrap_or_default().as_ref(),
-        extension_raw, &file_format.name().to_ascii_uppercase(), (msecs as i64, asecs as i64, csecs as i64),
+        &extension_raw, &file_format.name().to_ascii_uppercase(), (msecs as i64, asecs as i64, csecs as i64),
         compiled_rules, scan_config, hash_collections, fp_hash_collections, filename_iocs,
         logger, scan_state, None, None
     );
@@ -870,7 +913,7 @@ fn scan_memory_buffer(
         owner: "".to_string(),
     };
     
-    let yara_matches = scan_file(compiled_rules, content, scan_config, &ext_vars);
+    let yara_matches = scan_file(compiled_rules, content, scan_config, &ext_vars, path_display, logger);
     for ymatch in yara_matches.iter() {
         if !sample_matches.is_full() {
             let match_message = format!("YARA match with rule {}", ymatch.rulename);
@@ -940,7 +983,30 @@ fn scan_memory_buffer(
 }
 
 // scan a file
-fn scan_file(rules: &Rules, file_content: &[u8], scan_config: &ScanConfig, ext_vars: &ExtVars) -> ArrayVec<YaraMatch, 100> {
+fn format_yara_matched_data(data: &[u8]) -> String {
+    match std::str::from_utf8(data) {
+        Ok(text) => {
+            if text
+                .chars()
+                .all(|c| !c.is_control() || matches!(c, '\t' | '\n' | '\r'))
+            {
+                format!("'{}'", text.escape_debug())
+            } else {
+                hex::encode(data)
+            }
+        }
+        Err(_) => hex::encode(data),
+    }
+}
+
+fn scan_file(
+    rules: &Rules,
+    file_content: &[u8],
+    scan_config: &ScanConfig,
+    ext_vars: &ExtVars,
+    file_label: &str,
+    logger: &UnifiedLogger,
+) -> ArrayVec<YaraMatch, 100> {
     // YARA-X: Create scanner from rules
     let mut scanner = Scanner::new(rules);
     
@@ -1030,14 +1096,7 @@ fn scan_file(rules: &Rules, file_content: &[u8], scan_config: &ScanConfig, ext_v
                             let data = pattern_match.data();
                             
                             // Format string match
-                            let value_str = if data.iter().all(|&b| b.is_ascii() && (b >= 32 || b == 9 || b == 10 || b == 13)) {
-                                match String::from_utf8(data.to_vec()) {
-                                    Ok(s) => format!("'{}'", s),
-                                    Err(_) => hex::encode(data)
-                                }
-                            } else {
-                                hex::encode(data)
-                            };
+                            let value_str = format_yara_matched_data(data);
                             
                             matched_strings.push(format!("{}: {} @ {}", identifier, value_str, offset));
                         }
@@ -1059,11 +1118,17 @@ fn scan_file(rules: &Rules, file_content: &[u8], scan_config: &ScanConfig, ext_v
                 }
             }
         },
-        Err(e) => { 
-            if scan_config.show_access_errors { 
-                log::error!("YARA-X scan error: {:?}", e); 
+        Err(e) => {
+            let err_text = format!("{:?}", e);
+            if err_text.to_lowercase().contains("timeout") {
+                logger.warning(&format!(
+                    "YARA scan timeout while scanning FILE: {} - skipping and continuing",
+                    file_label
+                ));
+            } else if scan_config.show_access_errors {
+                logger.error(&format!("YARA-X scan error FILE: {} ERROR: {:?}", file_label, e));
             } else {
-                log::debug!("YARA-X scan error: {:?}", e);
+                logger.debug(&format!("YARA-X scan error FILE: {} ERROR: {:?}", file_label, e));
             }
         }
     }
@@ -1138,6 +1203,16 @@ mod tests {
         #[test]
         fn test_linux_path_skips_sys_kernel_debug() {
             assert!(LINUX_PATH_SKIPS_START.contains(&"/sys/kernel/debug"));
+        }
+
+        #[test]
+        fn test_linux_path_skips_sys_root() {
+            assert!(LINUX_PATH_SKIPS_START.contains(&"/sys"));
+        }
+
+        #[test]
+        fn test_linux_path_skips_run() {
+            assert!(LINUX_PATH_SKIPS_START.contains(&"/run"));
         }
 
         #[test]
@@ -1520,6 +1595,20 @@ mod tests {
         }
 
         #[test]
+        fn test_sys_class_excluded() {
+            let path = "/sys/class/net/eth0/address";
+            let should_skip = LINUX_PATH_SKIPS_START.iter().any(|skip| path.starts_with(skip));
+            assert!(should_skip);
+        }
+
+        #[test]
+        fn test_run_user_excluded() {
+            let path = "/run/user/1000/systemd/notify";
+            let should_skip = LINUX_PATH_SKIPS_START.iter().any(|skip| path.starts_with(skip));
+            assert!(should_skip);
+        }
+
+        #[test]
         fn test_usr_src_linux_excluded() {
             let path = "/usr/src/linux/kernel/sched.c";
             let should_skip = LINUX_PATH_SKIPS_START.iter().any(|skip| path.starts_with(skip));
@@ -1588,7 +1677,6 @@ mod tests {
     }
 
     mod program_directory_exclusion_tests {
-        use super::*;
         use std::path::Path;
 
         #[test]
@@ -1630,6 +1718,24 @@ mod tests {
             let file_path = Path::new("/usr/local/loki/config/excludes.cfg");
             let program_dir_path = Path::new(program_dir);
             assert!(file_path.starts_with(program_dir_path));
+        }
+    }
+
+    mod yara_format_tests {
+        use super::*;
+
+        #[test]
+        fn test_format_yara_matched_data_keeps_utf8_unicode() {
+            let data = "mimikätz-安全".as_bytes();
+            let formatted = format_yara_matched_data(data);
+            assert!(formatted.contains("mimikätz-安全"));
+        }
+
+        #[test]
+        fn test_format_yara_matched_data_binary_as_hex() {
+            let data = [0x00, 0xff, 0x10, 0x80];
+            let formatted = format_yara_matched_data(&data);
+            assert_eq!(formatted, "00ff1080");
         }
     }
 
