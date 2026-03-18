@@ -164,20 +164,20 @@ fn is_cloud_or_remote_path(path: &str) -> bool {
 // Check if a root path is a network drive (Windows only)
 #[cfg(windows)]
 fn is_network_drive(path: &str) -> bool {
-    // Need a root path like "C:\" or "\\server\share"
-    // If path is just a letter "C:", append backslash
-    let root = if path.len() == 2 && path.chars().nth(1) == Some(':') {
-        format!("{}\\", path)
+    // Normalize to drive root like "C:\"
+    let root = if path.len() >= 2 && path.as_bytes()[1] == b':' {
+        format!("{}\\", &path[..2])
     } else {
         path.to_string()
     };
-    
+
     let h_root = HSTRING::from(&root);
     let drive_type = unsafe { GetDriveTypeW(PCWSTR(h_root.as_ptr())) };
-    
-    // DRIVE_REMOTE = 4, DRIVE_NO_ROOT_DIR = 1
-    drive_type == DRIVE_REMOTE || drive_type == DRIVE_NO_ROOT_DIR
+
+    // Only treat true remote drives as network
+    drive_type == DRIVE_REMOTE
 }
+
 
 #[cfg(not(windows))]
 fn is_network_drive(_path: &str) -> bool {
