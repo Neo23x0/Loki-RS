@@ -1477,9 +1477,11 @@ fn main() {
                      if target_folders.len() > 1 {
                          logger.info(&format!("Scanning drive/mount {} of {}: {}", 
                              idx + 1, target_folders.len(), folder));
-                     } else {
+                     } else if scan_config.scan_hard_drives || scan_config.scan_all_drives{
                          logger.info("Scanning local file system ... ");
-                     }
+                     } else { 
+						 logger.info(&format!("Scanning target folder: {}", folder));
+					 }
                      
                      let context = ScanContext {
                          compiled_rules: &compiled_rules,
