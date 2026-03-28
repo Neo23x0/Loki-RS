@@ -1,11 +1,7 @@
 use std::{fs};
 use std::io::{Cursor, Read};
 use std::path::Path;
-<<<<<<< HEAD
-use std::time::{UNIX_EPOCH};
-=======
 use std::sync::atomic::{AtomicU64, Ordering};
->>>>>>> cd70683 (Fix progress logging to distinguish files seen from files scanned)
 use std::sync::Arc;
 use std::time::SystemTime;
 use std::time::{UNIX_EPOCH};
@@ -44,6 +40,8 @@ const DRIVE_REMOTE: u32 = 4;
 const DRIVE_CDROM: u32 = 5;
 #[cfg(windows)]
 const DRIVE_RAMDISK: u32 = 6;
+
+const PROGRESS_LOG_INTERVAL_SECS: u64 = 4;
 
 use crate::helpers::helpers::log_access_error;
 use crate::helpers::interrupt::ScanState;
@@ -453,8 +451,7 @@ impl ScanModule for FileScanModule {
     }
 }
 
-<<<<<<< HEAD
-=======
+
 fn maybe_log_progress(
     logger: &UnifiedLogger,
     scan_state: Option<&Arc<ScanState>>,
@@ -489,7 +486,7 @@ fn maybe_log_progress(
     }
 }
 
->>>>>>> cd70683 (Fix progress logging to distinguish files seen from files scanned)
+
 // Scan a given file system path
 pub fn scan_path(
     target_folder: &str,
@@ -539,39 +536,6 @@ pub fn scan_path(
         .into_iter();
 
     let scan_state_ref = scan_state.cloned();
-<<<<<<< HEAD
-
-    // Process files in parallel
-    let (files_scanned, files_matched, alert_count, warning_count, notice_count) = walk.par_bridge()
-        .map(|entry_res| {
-            match entry_res {
-                Ok(entry) => {
-                    throttle_start();
-                    let result = process_file_entry(
-                        entry,
-                        compiled_rules,
-                        scan_config,
-                        hash_collections,
-                        fp_hash_collections,
-                        filename_iocs,
-                        exclusion_patterns,
-                        logger,
-                        scan_state_ref.as_ref()
-                    );
-                    // Use dynamic CPU limit from ScanState if available
-                    let current_cpu_limit = scan_state_ref.as_ref()
-                        .map(|s| s.get_cpu_limit())
-                        .unwrap_or(cpu_limit);
-                    throttle_end_with_limit(current_cpu_limit);
-                    result
-                },
-                Err(e) => {
-                    log_access_error(logger, "fs_object", &e, scan_config.show_access_errors);
-                    if let Some(ref state) = scan_state_ref {
-                        state.increment_errors();
-                    }
-                    (0, 0, 0, 0, 0)
-=======
     let last_progress_log = Arc::new(AtomicU64::new(0));
 
     // Process files in parallel
@@ -605,7 +569,6 @@ pub fn scan_path(
                 log_access_error(logger, "fs_object", &e, scan_config.show_access_errors);
                 if let Some(ref state) = scan_state_ref {
                     state.increment_errors();
->>>>>>> cd70683 (Fix progress logging to distinguish files seen from files scanned)
                 }
                 (0, 0, 0, 0, 0)
             }
