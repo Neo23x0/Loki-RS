@@ -214,6 +214,7 @@ Loki-RS supports multiple log levels:
 ### Process scanning fails
 - Process memory scanning requires appropriate permissions
 - Some processes may be protected
+- On Linux, device-backed and kernel-special mappings are skipped intentionally to avoid unstable driver VMAs
 - On macOS, most processes deny memory access unless debugging entitlements or elevated privileges are present
 - Use `-n` to skip process scanning if needed
 
