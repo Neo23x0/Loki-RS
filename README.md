@@ -24,6 +24,10 @@ A rewrite of [Loki](https://github.com/Neo23x0/Loki) in Rust. High-performance, 
 
 Process memory scanning on macOS is best-effort and typically requires debugging entitlements or elevated privileges. Without those, Loki-RS will still scan files but will not be able to read most process memory. Use `--no-procs` to skip process scanning if needed.
 
+## Linux process scanning
+
+On Linux, Loki-RS skips device-backed and kernel-special process mappings before reading `/proc/<pid>/mem`. This avoids known instability with some driver-managed VMAs while preserving normal anonymous, heap/stack, and regular file-backed memory scanning. If you still hit environment-specific issues, use `--no-procs` to disable process scanning.
+
 ## Installation
 
 Download the pre-compiled binary for your platform from the [Releases Page](https://github.com/Neo23x0/Loki-RS/releases).

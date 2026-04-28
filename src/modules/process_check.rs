@@ -12,6 +12,8 @@ use rayon::prelude::*;
 use std::io::{Read, Seek, SeekFrom};
 #[cfg(target_os = "linux")]
 use std::fs;
+#[cfg(target_os = "linux")]
+use std::os::unix::fs::FileTypeExt;
 
 // macOS Mach memory access
 #[cfg(target_os = "macos")]
@@ -764,12 +766,14 @@ fn read_process_memory(pid: u32) -> Vec<u8> {
         
         let range_str = parts[0];
         let perms = parts[1];
+        let pathname = if parts.len() > 5 {
+            Some(parts[5..].join(" "))
+        } else {
+            None
+        };
         
         // Only read readable regions
-        if !perms.contains('r') { continue; }
-        // Skip shared memory or devices often causing I/O errors?
-        // Usually heap/stack are rw-p. Code is r-xp.
-        // We read everything readable.
+        if !should_scan_linux_mapping(perms, pathname.as_deref()) { continue; }
         
         let ranges: Vec<&str> = range_str.split('-').collect();
         if ranges.len() != 2 { continue; }
@@ -801,6 +805,41 @@ fn read_process_memory(pid: u32) -> Vec<u8> {
     }
     
     buffer
+}
+
+#[cfg(target_os = "linux")]
+fn should_scan_linux_mapping(perms: &str, pathname: Option<&str>) -> bool {
+    if !perms.starts_with('r') {
+        return false;
+    }
+
+    let Some(pathname) = pathname.map(str::trim).filter(|path| !path.is_empty()) else {
+        return true;
+    };
+
+    // Skip kernel-provided pseudo mappings that do not carry useful user-mode content.
+    if pathname.starts_with("[vdso")
+        || pathname.starts_with("[vvar")
+        || pathname.starts_with("[vsyscall")
+        || pathname.starts_with("[vectors")
+    {
+        return false;
+    }
+
+    let stat_path = pathname.strip_suffix(" (deleted)").unwrap_or(pathname);
+
+    if let Ok(metadata) = fs::metadata(stat_path) {
+        let file_type = metadata.file_type();
+        if file_type.is_char_device() || file_type.is_block_device() {
+            return false;
+        }
+    } else if stat_path.starts_with("/dev/") && !stat_path.starts_with("/dev/shm/") {
+        // Device-backed VMAs are serviced by driver .access hooks; some drivers
+        // are unstable when these regions are read via /proc/<pid>/mem.
+        return false;
+    }
+
+    true
 }
 
 #[cfg(target_os = "macos")]
@@ -912,4 +951,61 @@ fn format_runtime(seconds: u64) -> String {
     let minutes = (seconds % 3600) / 60;
     let secs = seconds % 60;
     format!("{}d:{}h:{}m:{}s", days, hours, minutes, secs)
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod linux_process_memory_tests {
+    use super::should_scan_linux_mapping;
+    use std::fs;
+    use std::path::PathBuf;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn temp_path(prefix: &str) -> PathBuf {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        std::env::temp_dir().join(format!("{}-{}-{}", prefix, std::process::id(), nanos))
+    }
+
+    #[test]
+    fn keeps_anonymous_and_heap_mappings() {
+        assert!(should_scan_linux_mapping("rw-p", None));
+        assert!(should_scan_linux_mapping("rw-p", Some("[heap]")));
+        assert!(should_scan_linux_mapping("rw-p", Some("[stack]")));
+    }
+
+    #[test]
+    fn skips_kernel_special_mappings() {
+        assert!(!should_scan_linux_mapping("r-xp", Some("[vdso]")));
+        assert!(!should_scan_linux_mapping("r--p", Some("[vvar]")));
+        assert!(!should_scan_linux_mapping("r-xp", Some("[vsyscall]")));
+    }
+
+    #[test]
+    fn skips_device_backed_mappings() {
+        assert!(!should_scan_linux_mapping("rw-s", Some("/dev/null")));
+        assert!(!should_scan_linux_mapping("rw-s", Some("/dev/nvidiactl")));
+    }
+
+    #[test]
+    fn keeps_regular_file_backed_mappings() {
+        let path = temp_path("loki-rs-proc-map");
+        fs::write(&path, b"ok").unwrap();
+
+        assert!(should_scan_linux_mapping("r-xp", Some(path.to_str().unwrap())));
+
+        let deleted_path = format!("{} (deleted)", path.display());
+        assert!(should_scan_linux_mapping("rw-p", Some(&deleted_path)));
+
+        fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn allows_dev_shm_files_when_metadata_is_missing() {
+        assert!(should_scan_linux_mapping(
+            "rw-s",
+            Some("/dev/shm/loki-rs-nonexistent-shared-memory")
+        ));
+    }
 }
