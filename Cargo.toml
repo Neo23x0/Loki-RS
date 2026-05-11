@@ -32,7 +32,7 @@ hex = "0.4.3"
 memmap2 = "0.9.10"
 chrono = { version = "0.4.44", features = ["serde"] }
 regex = "1.12.3"
-yara-x = "1.13.0"
+yara-x = "1.14.0"
 zip = { version = "7.0", default-features = false, features = [
     "aes-crypto",
     "bzip2",
