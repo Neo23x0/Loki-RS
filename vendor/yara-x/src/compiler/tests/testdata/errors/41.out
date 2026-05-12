@@ -1,0 +1,5 @@
+error[E014]: invalid regular expression
+ --> line:3:12
+  |
+3 |     $a = /a[]b/
+  |            ^^ unclosed character class

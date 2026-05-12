@@ -1,0 +1,7 @@
+error[E003]: mismatching types
+ --> line:4:7
+  |
+4 |       n == "3"
+  |       ^    ^^^ this expression is `string`
+  |       |
+  |       this expression is `integer`

@@ -1,0 +1,85 @@
+rule test_1 {
+  strings:
+    $a = "foo"
+    $b = "bar"
+  condition:
+    none of them at 0
+}
+
+rule test_2 {
+  strings:
+    $a = "foo"
+    $b = "bar"
+  condition:
+    any of them at 0
+}
+
+rule test_3 {
+  strings:
+    $a = "foo"
+    $b = "bar"
+  condition:
+    1 of them at 0
+}
+
+rule test_4 {
+  strings:
+    $a = "foo"
+  condition:
+    none of ($a*) at 0
+}
+
+rule test_5 {
+  strings:
+    $a = "foo"
+  condition:
+    all of ($a*, $a*) at 0
+}
+
+rule test_6 {
+  strings:
+    $a = /[A-Fa-f0-9]{2,}/
+  condition:
+    $a
+}
+
+rule test_7 {
+  strings:
+    $a = { 50 4B 03 04 }
+    $b = { 7F 45 4C 46 }
+  condition:
+    $a and $b
+}
+
+rule test_8 {
+    condition:
+        uint8(0) == 0 or uint8(0) == 0xFF or
+        uint16(0) == 0 or uint16(0) == 0xFFFF or
+        uint32(0) == 0 or uint32(0) == 0xFFFFFFFF
+}
+
+rule test_9 {
+  strings:
+    // suppress: text_as_hex
+    $a = { 61 62 63 64 }
+    $b = { 61 62 63 64 } // suppress: text_as_hex
+  condition:
+    $a and $b or true // suppress: invariant_expr
+}
+
+// suppress: text_as_hex
+// suppress: invariant_expr
+rule test_10 {
+  strings:
+    $a = { 61 62 63 64 }
+    $b = { 61 62 63 64 }
+  condition:
+    $a and $b or true
+}
+
+rule test_11 {
+  condition:
+    with a = 1, b = 2, c = 3 : (
+       a == 1 and b == 2 and c == 3
+    )
+}
