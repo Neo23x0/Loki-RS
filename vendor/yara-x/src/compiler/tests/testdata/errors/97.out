@@ -1,0 +1,5 @@
+error[E022]: unused pattern `$`
+ --> line:4:6
+  |
+4 |      $  = "bar"
+  |      ^ this pattern was not used in the condition

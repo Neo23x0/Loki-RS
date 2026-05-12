@@ -1,0 +1,5 @@
+error[E006]: unexpected negative number
+ --> line:3:19
+  |
+3 |   condition: 1 << -1 == 0
+  |                   ^^ this number can not be negative

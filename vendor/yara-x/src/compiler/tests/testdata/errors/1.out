@@ -1,0 +1,8 @@
+error[E012]: duplicate rule `test`
+ --> line:5:6
+  |
+1 | rule test {
+  |      ---- `test` declared here for the first time
+...
+5 | rule test {
+  |      ^^^^ duplicate declaration of `test`

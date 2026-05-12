@@ -1,0 +1,350 @@
+use std::collections::hash_map::Entry;
+use std::ops::{Add, Range, RangeInclusive, Sub};
+
+use core::slice::Iter;
+use rustc_hash::FxHashMap;
+
+use crate::compiler::PatternId;
+
+/// Represents the match of a pattern.
+#[derive(Debug, Clone)]
+pub(crate) struct Match {
+    /// Base offset of the block where the match occurred.
+    pub base: usize,
+    /// Range within the scanned data where the match occurred. Notice that
+    /// this is an absolute range, in other words: in block scanning this
+    /// range is not relative to the block where the match occurred, it is
+    /// relative to the start of the data.
+    pub range: Range<usize>,
+    /// For patterns that have the `xor` modifier this is always `Some(k)`
+    /// where `k` is the XOR key (it may be 0). For any other type of
+    /// pattern this is `None`.
+    pub xor_key: Option<u8>,
+}
+
+impl Match {
+    pub fn new(range: Range<usize>) -> Self {
+        Self { base: 0, range, xor_key: None }
+    }
+
+    /// Sets the base for the match.
+    ///
+    /// Subtract the previous base from the match start and end, and
+    /// adds the new one.
+    pub fn rebase(mut self, base: usize) -> Self {
+        self.range = self.range.start.sub(self.base).add(base)
+            ..self.range.end.sub(self.base).add(base);
+        self.base = base;
+        self
+    }
+
+    /// Sets the xor key for the match.
+    pub fn xor_key(mut self, key: u8) -> Self {
+        self.xor_key = Some(key);
+        self
+    }
+}
+
+/// Represents the list of matches for a pattern.
+///
+/// The matches are kept sorted by starting offset in ascending order. Two
+/// different matches can't have the same starting offset.
+#[derive(Debug, Default)]
+pub(crate) struct MatchList {
+    matches: Vec<Match>,
+}
+
+impl MatchList {
+    /// Creates a new [`MatchList`] that can hold at least `capacity` items
+    /// without relocating. The capacity will increase if [`MatchList::add`]
+    /// is called and there's no capacity to store the new item.
+    pub fn with_capacity(capacity: usize) -> Self {
+        Self { matches: Vec::with_capacity(capacity) }
+    }
+
+    /// Adds a new match to the list while keeping the matches sorted by
+    /// start offset in ascending order. If a match at the same offset already
+    /// exits, and the length of the new match is longer than the existing one,
+    /// the old match will be replaced if `replace_if_longer` is true. If it
+    /// is false, the existing match will remain untouched and the new one will
+    /// be ignored.
+    ///
+    /// This operation is O(1) in the most common case, which is inserting
+    /// the new match at an offset that is higher than those from previous
+    /// matches.
+    pub fn add(&mut self, new_match: Match, replace_if_longer: bool) {
+        match self.matches.last_mut() {
+            // The new match starts at some offset greater than the offset of
+            // the last match, we can simply push the new match at the end.
+            Some(last) if new_match.range.start > last.range.start => {
+                self.matches.push(new_match);
+                return;
+            }
+            // The new match starts has the same offset as the last match. We
+            // only need to update its end position when replace_if_longer is
+            // true.
+            Some(last) if new_match.range.start == last.range.start => {
+                if replace_if_longer {
+                    last.range.end = new_match.range.end;
+                }
+                return;
+            }
+            // No matches so far, the match is first one.
+            None => {
+                self.matches.push(new_match);
+                return;
+            }
+            _ => {}
+        }
+        // If not at the end, use binary search to find the insertion point.
+        match self
+            .matches
+            .binary_search_by_key(&new_match.range.start, |m| m.range.start)
+        {
+            // Found, and replace_if_longer is true.
+            Ok(index) if replace_if_longer => {
+                let existing_match = &mut self.matches[index];
+                if existing_match.range.end < new_match.range.end {
+                    existing_match.range.end = new_match.range.end;
+                }
+            }
+            // Not found, insert at the corresponding position.
+            Err(index) => {
+                self.matches.insert(index, new_match);
+            }
+            // Found, but replace_if_longer is false, do nothing and keep the
+            // existing match.
+            _ => {}
+        }
+    }
+
+    #[inline]
+    pub fn get(&self, i: usize) -> Option<&Match> {
+        self.matches.get(i)
+    }
+
+    /// Returns the number of matches that start within the given range.
+    pub fn matches_in_range(&self, range: RangeInclusive<isize>) -> i64 {
+        // If the end of the range is negative there can't be any matches in
+        // that range.
+        if range.end().is_negative() {
+            return 0;
+        }
+
+        let start: usize = (*range.start()).try_into().unwrap_or(0);
+        let end: usize = (*range.end()).try_into().unwrap();
+
+        // Find the index of the match that starts at `start`, or the index
+        // where it should be. Any match starting at some offset >= `start`,
+        // must be located at `index` or higher in the matches array.
+        // Notice that the fact that two matches can't have the same starting
+        // offset is very helpful in this case. Because of this, we don't need
+        // to take into account matches at `index-1`, `index-2`, etc. Otherwise,
+        // we would like to take into account matches at those indexes because
+        // the `search` function does not guarantee that it returns the *first*
+        // match with a given offset, but *any* match with that offset.
+        match self.search(start) {
+            Ok(index) | Err(index) => {
+                let mut count = 0;
+                for m in &self.matches.as_slice()[index..] {
+                    if (start..=end).contains(&m.range.start) {
+                        count += 1;
+                    } else {
+                        break;
+                    }
+                }
+                count
+            }
+        }
+    }
+
+    #[inline]
+    pub fn capacity(&self) -> usize {
+        self.matches.capacity()
+    }
+
+    #[inline]
+    pub fn clear(&mut self) {
+        self.matches.clear()
+    }
+
+    #[inline]
+    pub fn len(&self) -> usize {
+        self.matches.len()
+    }
+
+    #[inline]
+    pub fn iter(&self) -> Iter<'_, Match> {
+        self.matches.iter()
+    }
+
+    /// Searches for a match that starts at the given offset.
+    ///
+    /// If a match starting at `offset` is found, then [`Ok`] is returned
+    /// containing the index of the match. If no match is found, then [`Err`]
+    /// is returned, containing the index where the match would be located.
+    ///
+    /// This operation is O(log(N)) because it takes advantage of the fact
+    /// that matches are sorted by starting offset and uses a binary search
+    /// internally.
+    ///
+    /// The list can't contain two matches with the same starting offset,
+    /// but if that would be the case this function doesn't guarantee that
+    /// it returns the *first* match with given offset, but *any* match
+    /// with that offset.
+    #[inline]
+    pub fn search(&self, offset: usize) -> Result<usize, usize> {
+        self.matches.binary_search_by(|m| m.range.start.cmp(&offset))
+    }
+}
+
+impl<'a> IntoIterator for &'a MatchList {
+    type Item = &'a Match;
+    type IntoIter = Iter<'a, Match>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.iter()
+    }
+}
+
+#[derive(Clone)]
+pub struct UnconfirmedMatch {
+    pub range: Range<usize>,
+    pub chain_length: usize,
+}
+
+/// A hash map that tracks matches for each pattern.
+///
+/// Each key in this map is a [`PatternId`], and its associated value is a
+/// [`MatchList`] that contains the matches found for the pattern.
+///
+/// Each pattern is limited to a maximum number of matches that may be
+/// configured.
+pub(crate) struct PatternMatches {
+    matches: FxHashMap<PatternId, MatchList>,
+    max_matches_per_pattern: usize,
+    capacity: usize,
+}
+
+impl PatternMatches {
+    /// The maximum number of matches accepted for each pattern by default.
+    const DEFAULT_MAX_MATCHES_PER_PATTERN: usize = 1_000_000;
+
+    pub fn new() -> Self {
+        Self {
+            matches: FxHashMap::default(),
+            max_matches_per_pattern: Self::DEFAULT_MAX_MATCHES_PER_PATTERN,
+            capacity: 0,
+        }
+    }
+
+    /// Sets the maximum number of matches per pattern.
+    ///
+    /// The default value is [`Self::DEFAULT_MAX_MATCHES_PER_PATTERN`].
+    pub fn max_matches_per_pattern(&mut self, n: usize) -> &mut Self {
+        self.max_matches_per_pattern = n;
+        self
+    }
+
+    /// Returns the list of matches for a given pattern.
+    pub fn get(&self, pattern_id: PatternId) -> Option<&MatchList> {
+        self.matches.get(&pattern_id)
+    }
+
+    #[inline]
+    pub fn is_empty(&self) -> bool {
+        self.matches.is_empty()
+    }
+
+    /// Clears the matches for all patterns.
+    ///
+    /// To optimize performance, the memory allocated for storing matches
+    /// is not released every time this function is invoked. Instead, the
+    /// allocated memory is retained and reused in subsequent scans. However,
+    /// due to the potential volume of patterns and matches, persistently
+    /// holding onto this memory can result in a significant memory footprint.
+    /// When the total capacity of stored data exceeds a defined threshold,
+    /// memory is deallocated to manage resource usage efficiently.
+    pub fn clear(&mut self) {
+        // If the capacity goes above a certain threshold, completely
+        // clear the matches, which frees the memory associated to the
+        // list of matches. If not, clear the list of matches, but maintain
+        // the memory allocated for them.
+        if self.capacity > 10000 {
+            self.matches.clear();
+            self.capacity = 0;
+        } else {
+            for (_, matches) in self.matches.iter_mut() {
+                matches.clear();
+            }
+        }
+    }
+
+    /// Adds a new match to the pattern identified by the given [`PatternId`]
+    ///
+    /// If a match at the same offset already exists, the `replace_if_longer`
+    /// argument indicates what to do. If this argument is `true` and the new
+    /// match is longer than the existing one, the existing match will be
+    /// replaced. If the argument is `false` the new match will be ignored and
+    /// the existing one will remain.
+    ///
+    /// This function returns `true` if the new match was added, or `false`
+    /// if the pattern already reached the maximum number of matches and
+    /// therefore the new match was not added.
+    pub fn add(
+        &mut self,
+        pattern_id: PatternId,
+        m: Match,
+        replace_if_longer: bool,
+    ) -> bool {
+        match self.matches.entry(pattern_id) {
+            Entry::Occupied(mut entry) => {
+                let matches = entry.get_mut();
+                if matches.len() < self.max_matches_per_pattern {
+                    self.capacity -= matches.capacity();
+                    matches.add(m, replace_if_longer);
+                    self.capacity += matches.capacity();
+                    true
+                } else {
+                    false
+                }
+            }
+            Entry::Vacant(entry) => {
+                let mut matches = MatchList::with_capacity(8);
+                self.capacity += matches.capacity();
+                matches.add(m, replace_if_longer);
+                entry.insert(matches);
+                true
+            }
+        }
+    }
+
+    pub fn matches_per_pattern(
+        &self,
+    ) -> impl Iterator<Item = (&PatternId, &MatchList)> {
+        self.matches.iter()
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use crate::scanner::matches::{Match, MatchList};
+    use std::ops::Range;
+
+    #[test]
+    fn match_list() {
+        let mut ml = MatchList::with_capacity(5);
+
+        ml.add(Match::new(2..10), false);
+        ml.add(Match::new(1..10), false);
+        ml.add(Match::new(1..15), true);
+        ml.add(Match::new(4..10), false);
+        ml.add(Match::new(3..10), false);
+        ml.add(Match::new(5..10), false);
+
+        assert_eq!(
+            ml.iter().map(|m| m.range.clone()).collect::<Vec<Range<usize>>>(),
+            vec![(1..15), (2..10), (3..10), (4..10), (5..10)]
+        )
+    }
+}

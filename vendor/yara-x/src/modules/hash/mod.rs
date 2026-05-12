@@ -1,0 +1,264 @@
+use std::cell::RefCell;
+use std::convert::TryInto;
+
+use md5::Md5;
+use rustc_hash::FxHashMap;
+use sha1::Sha1;
+use sha2::{Digest, Sha256};
+
+use crate::modules::prelude::*;
+use crate::modules::protos::hash::*;
+
+#[cfg(test)]
+mod tests;
+
+thread_local!(
+    static SHA256_CACHE: RefCell<FxHashMap<(i64, i64), String>> =
+        RefCell::new(FxHashMap::default());
+
+    static SHA1_CACHE: RefCell<FxHashMap<(i64, i64), String>> =
+        RefCell::new(FxHashMap::default());
+
+    static MD5_CACHE: RefCell<FxHashMap<(i64, i64), String>> =
+        RefCell::new(FxHashMap::default());
+
+    static CRC32_CACHE: RefCell<FxHashMap<(i64, i64), i64>> =
+        RefCell::new(FxHashMap::default());
+
+    static CHECKSUM32_CACHE: RefCell<FxHashMap<(i64, i64), i64>> =
+        RefCell::new(FxHashMap::default());
+);
+
+#[module_main]
+fn main(_data: &[u8], _meta: Option<&[u8]>) -> Result<Hash, ModuleError> {
+    // With every scanned file the cache must be cleared.
+    SHA256_CACHE.with(|cache| cache.borrow_mut().clear());
+    SHA1_CACHE.with(|cache| cache.borrow_mut().clear());
+    MD5_CACHE.with(|cache| cache.borrow_mut().clear());
+    CRC32_CACHE.with(|cache| cache.borrow_mut().clear());
+    CHECKSUM32_CACHE.with(|cache| cache.borrow_mut().clear());
+
+    Ok(Hash::new())
+}
+
+/// Calculates the MD5 hash of a portion of the scanned data.
+#[module_export(name = "md5")]
+fn md5_data(
+    ctx: &mut ScanContext,
+    offset: i64,
+    size: i64,
+) -> Option<Lowercase<FixedLenString<32>>> {
+    let cached = MD5_CACHE.with(|cache| {
+        Some(Lowercase::<FixedLenString<32>>::from_slice(
+            ctx,
+            cache.borrow().get(&(offset, size))?.as_bytes(),
+        ))
+    });
+
+    if cached.is_some() {
+        return cached;
+    }
+
+    let range = offset.try_into().ok()?..(offset + size).try_into().ok()?;
+    let data = ctx.scanned_data()?.get(range)?;
+    let mut hasher = Md5::new();
+
+    hasher.update(data);
+
+    let digest = format!("{:x}", hasher.finalize());
+
+    MD5_CACHE.with(|cache| {
+        cache.borrow_mut().insert((offset, size), digest.clone());
+    });
+
+    Some(Lowercase::<FixedLenString<32>>::new(digest))
+}
+
+/// Calculates the MD5 hash of a string.
+#[module_export(name = "md5")]
+fn md5_str(
+    ctx: &mut ScanContext,
+    s: RuntimeString,
+) -> Option<Lowercase<FixedLenString<32>>> {
+    let mut hasher = Md5::new();
+    hasher.update(s.as_bstr(ctx));
+
+    Some(Lowercase::<FixedLenString<32>>::new(format!(
+        "{:x}",
+        hasher.finalize()
+    )))
+}
+
+/// Calculates the SHA-1 hash of a portion of the scanned data.
+#[module_export(name = "sha1")]
+fn sha1_data(
+    ctx: &mut ScanContext,
+    offset: i64,
+    size: i64,
+) -> Option<Lowercase<FixedLenString<40>>> {
+    let cached = SHA1_CACHE.with(|cache| {
+        Some(Lowercase::<FixedLenString<40>>::from_slice(
+            ctx,
+            cache.borrow().get(&(offset, size))?.as_bytes(),
+        ))
+    });
+
+    if cached.is_some() {
+        return cached;
+    }
+
+    let range = offset.try_into().ok()?..(offset + size).try_into().ok()?;
+    let data = ctx.scanned_data()?.get(range)?;
+    let mut hasher = Sha1::new();
+
+    hasher.update(data);
+
+    let digest = format!("{:x}", hasher.finalize());
+
+    SHA1_CACHE.with(|cache| {
+        cache.borrow_mut().insert((offset, size), digest.clone());
+    });
+
+    Some(Lowercase::<FixedLenString<40>>::new(digest))
+}
+
+/// Calculates the SHA-1 hash of a string.
+#[module_export(name = "sha1")]
+fn sha1_str(
+    ctx: &mut ScanContext,
+    s: RuntimeString,
+) -> Option<Lowercase<FixedLenString<40>>> {
+    let mut hasher = Sha1::new();
+    hasher.update(s.as_bstr(ctx));
+
+    Some(Lowercase::<FixedLenString<40>>::new(format!(
+        "{:x}",
+        hasher.finalize()
+    )))
+}
+
+/// Calculates the SHA-256 hash of a portion of the scanned data.
+#[module_export(name = "sha256")]
+fn sha256_data(
+    ctx: &mut ScanContext,
+    offset: i64,
+    size: i64,
+) -> Option<Lowercase<FixedLenString<64>>> {
+    let cached = SHA256_CACHE.with(|cache| {
+        Some(Lowercase::<FixedLenString<64>>::from_slice(
+            ctx,
+            cache.borrow().get(&(offset, size))?.as_bytes(),
+        ))
+    });
+
+    if cached.is_some() {
+        return cached;
+    }
+
+    let range = offset.try_into().ok()?..(offset + size).try_into().ok()?;
+    let data = ctx.scanned_data()?.get(range)?;
+    let mut hasher = Sha256::new();
+
+    hasher.update(data);
+
+    let digest = format!("{:x}", hasher.finalize());
+
+    SHA256_CACHE.with(|cache| {
+        cache.borrow_mut().insert((offset, size), digest.clone());
+    });
+
+    Some(Lowercase::<FixedLenString<64>>::new(digest))
+}
+
+/// Calculates the SHA-256 hash of a string.
+#[module_export(name = "sha256")]
+fn sha256_str(
+    ctx: &mut ScanContext,
+    s: RuntimeString,
+) -> Option<Lowercase<FixedLenString<64>>> {
+    let mut hasher = Sha256::new();
+    hasher.update(s.as_bstr(ctx));
+
+    Some(Lowercase::<FixedLenString<64>>::new(format!(
+        "{:x}",
+        hasher.finalize()
+    )))
+}
+
+/// Calculates the CRC32 checksum of a portion of the scanned data.
+#[module_export(name = "crc32")]
+fn crc_data(ctx: &ScanContext, offset: i64, size: i64) -> Option<i64> {
+    let cached = CRC32_CACHE.with(|cache| -> Option<i64> {
+        Some(*cache.borrow().get(&(offset, size))?)
+    });
+
+    if cached.is_some() {
+        return cached;
+    }
+
+    let range = offset.try_into().ok()?..(offset + size).try_into().ok()?;
+    let data = ctx.scanned_data()?.get(range)?;
+    let crc = crc32fast::hash(data);
+
+    CRC32_CACHE.with(|cache| {
+        cache.borrow_mut().insert((offset, size), crc.into());
+    });
+
+    Some(crc.into())
+}
+
+/// Calculates the CRC32 checksum of a string.
+#[module_export(name = "crc32")]
+fn crc_str(ctx: &ScanContext, s: RuntimeString) -> Option<i64> {
+    let crc = crc32fast::hash(s.as_bstr(ctx));
+    Some(crc.into())
+}
+
+#[inline]
+fn checksum32(data: &[u8]) -> u32 {
+    let mut sum = 0_u64;
+    let mut chunks = data.chunks_exact(8);
+
+    for chunk in &mut chunks {
+        let x = u64::from_le_bytes(chunk.try_into().unwrap());
+        let pairs = (x & 0x00ff_00ff_00ff_00ff)
+            + ((x >> 8) & 0x00ff_00ff_00ff_00ff);
+        let quads = (pairs & 0x0000_ffff_0000_ffff)
+            + ((pairs >> 16) & 0x0000_ffff_0000_ffff);
+        sum = sum.wrapping_add((quads & 0xffff_ffff) + (quads >> 32));
+    }
+
+    let mut checksum = sum as u32;
+    for byte in chunks.remainder() {
+        checksum = checksum.wrapping_add(*byte as u32);
+    }
+    checksum
+}
+
+/// Calculates the 32-bit checksum of a portion of the scanned data.
+#[module_export(name = "checksum32")]
+fn checksum_data(ctx: &ScanContext, offset: i64, size: i64) -> Option<i64> {
+    let cached = CHECKSUM32_CACHE.with(|cache| -> Option<i64> {
+        Some(*cache.borrow().get(&(offset, size))?)
+    });
+
+    if cached.is_some() {
+        return cached;
+    }
+
+    let range = offset.try_into().ok()?..(offset + size).try_into().ok()?;
+    let data = ctx.scanned_data()?.get(range)?;
+    let checksum = checksum32(data);
+
+    CHECKSUM32_CACHE.with(|cache| {
+        cache.borrow_mut().insert((offset, size), checksum.into());
+    });
+
+    Some(checksum.into())
+}
+
+/// Calculates the 32-bit checksum of a string.
+#[module_export(name = "checksum32")]
+fn checksum_str(ctx: &ScanContext, s: RuntimeString) -> Option<i64> {
+    Some(checksum32(s.as_bstr(ctx).as_bytes()).into())
+}

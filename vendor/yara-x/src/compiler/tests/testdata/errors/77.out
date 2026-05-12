@@ -1,0 +1,5 @@
+error[E001]: syntax error
+ --> line:1:1
+  |
+1 | foo rule test { condition: true }
+  | ^^^ expecting import statement or rule definition

@@ -1,0 +1,600 @@
+syntax = "proto2";
+import "yara.proto";
+
+package macho;
+
+option (yara.module_options) = {
+  name : "macho"
+  root_message: "macho.Macho"
+  rust_module: "macho"
+  cargo_feature: "macho-module"
+};
+
+message MinVersion {
+  // Target device type (e.g., MACOSX, IPHONEOS).
+  optional DeviceType device = 1;
+  // Minimum OS version string required to run the binary.
+  optional string version = 2;
+  // Version string of the SDK used to build the binary.
+  optional string sdk = 3;
+}
+
+message BuildVersion {
+  // Target platform designation.
+  optional uint32 platform = 1;
+  // Minimum OS version required as a string.
+  optional string minos = 2;
+  // Version string of the SDK utilized.
+  optional string sdk = 3;
+  // Number of build tools embedded.
+  optional uint32 ntools = 4;
+  // Information regarding individual tools utilized in the build.
+  repeated BuildTool tools = 5;
+}
+
+message BuildTool {
+  // Identifier representing the tool utilized.
+  optional uint32 tool = 1;
+  // Version string corresponding to the tool.
+  optional string version = 2;
+}
+
+message LinkedItData {
+  // File offset pointing to the linked data.
+  optional uint32 dataoff = 1;
+  // Size in bytes of the linked data payload.
+  optional uint32 datasize = 2;
+}
+
+message Certificate {
+  // Name of the issuer of the certificate.
+  required string issuer = 1;
+  // Subject designation of the certificate.
+  required string subject = 2;
+  // True if the certificate is self-signed.
+  required bool is_self_signed = 3;
+}
+
+message Dylib {
+  // Library name string.
+  required bytes name = 1;
+  // Build timestamp of the dynamic library.
+  required uint32 timestamp = 2 [(yara.field_options).fmt = "t"];
+  // Compatibility version requirement string.
+  required string compatibility_version = 3;
+  // Current version designation string.
+  required string current_version = 4;
+}
+
+message DyldInfo {
+  // File offset to the rebase information.
+  optional uint32 rebase_off = 1;
+  // Size in bytes of the rebase payload.
+  optional uint32 rebase_size = 2;
+  // File offset to the primary binding info.
+  optional uint32 bind_off = 3;
+  // Size of the binding data in bytes.
+  optional uint32 bind_size = 4;
+  // File offset to weak binding definitions.
+  optional uint32 weak_bind_off = 5;
+  // Size of weak binding definitions.
+  optional uint32 weak_bind_size = 6;
+  // File offset to lazy binding definitions.
+  optional uint32 lazy_bind_off = 7;
+  // Size of lazy binding definitions.
+  optional uint32 lazy_bind_size = 8;
+  // File offset to exported symbols and data.
+  optional uint32 export_off = 9;
+  // Size of the export payload.
+  optional uint32 export_size = 10;
+}
+
+message Nlist {
+  // Index into the string table representing the symbol name.
+  optional uint32 n_strx = 1;
+  // Symbol type flag designation.
+  optional uint32 n_type = 2;
+  // Section index associated with the symbol.
+  optional uint32 n_sect = 3;
+  // Description attributes of the symbol.
+  optional uint32 n_desc = 4;
+  // Value or address of the symbol.
+  optional uint64 n_value = 5;
+}
+
+message Symtab {
+  // Physical offset to the start of the symbol table.
+  optional uint32 symoff = 1;
+  // Count of total symbols stored.
+  optional uint32 nsyms = 2;
+  // Physical offset to the string table data.
+  optional uint32 stroff = 3;
+  // Size in bytes of the string table.
+  optional uint32 strsize = 4;
+  // Individual entries stored in the table.
+  repeated bytes entries = 5;
+  // Descriptive nlist entries for symbols.
+  repeated Nlist nlists = 6;
+}
+
+message Dysymtab {
+  // Index of the first local symbol.
+  optional uint32 ilocalsym = 3;
+  // Total number of local symbols.
+  optional uint32 nlocalsym = 4;
+  // Index of the first externally defined symbol.
+  optional uint32 iextdefsym = 5;
+  // Total count of externally defined symbols.
+  optional uint32 nextdefsym = 6;
+  // Index of the first undefined symbol.
+  optional uint32 iundefsym = 7;
+  // Total count of undefined symbols.
+  optional uint32 nundefsym = 8;
+  // Physical file offset to the table of contents.
+  optional uint32 tocoff = 9;
+  // Total entries within the table of contents.
+  optional uint32 ntoc = 10;
+  // Physical offset to the module table.
+  optional uint32 modtaboff = 11;
+  // Total module entries in the module table.
+  optional uint32 nmodtab = 12;
+  // File offset to external reference symbol entries.
+  optional uint32 extrefsymoff = 13;
+  // Total entries for external reference symbols.
+  optional uint32 nextrefsyms = 14;
+  // File offset to indirect symbol entries.
+  optional uint32 indirectsymoff = 15;
+  // Count of indirect symbol elements.
+  optional uint32 nindirectsyms = 16;
+  // File offset to external relocation entries.
+  optional uint32 extreloff = 17;
+  // Count of external relocation records.
+  optional uint32 nextrel = 18;
+  // File offset to local relocation elements.
+  optional uint32 locreloff = 19;
+  // Total count of local relocation entries.
+  optional uint32 nlocrel = 20;
+}
+
+message Section {
+  // Segment name the section belongs to.
+  optional bytes segname = 1;
+  // Individual section designation string.
+  optional bytes sectname = 2;
+  // Address where the section is mapped in virtual memory.
+  optional uint64 addr = 3 [(yara.field_options).fmt = "x"];
+  // Total virtual memory size occupied by the section.
+  optional uint64 size = 4 [(yara.field_options).fmt = "x"];
+  // File offset pointing to the section data.
+  optional uint32 offset = 5;
+  // Memory alignment constraint of the section.
+  optional uint32 align = 6;
+  // File offset to relocation entries.
+  optional uint32 reloff = 7;
+  // Total count of relocation entries.
+  optional uint32 nreloc = 8;
+  // Bitwise flags and attributes characterizing the section.
+  optional uint32 flags = 9 [(yara.field_options).fmt = "x"];
+  // First reserved padding field.
+  optional uint32 reserved1 = 10;
+  // Second reserved padding field.
+  optional uint32 reserved2 = 11;
+  // Third reserved padding field.
+  optional uint32 reserved3 = 12;
+}
+
+message Segment {
+  // Text identifier of the segment.
+  optional bytes segname = 3;
+  // Virtual memory address where the segment is mapped.
+  optional uint64 vmaddr = 4 [(yara.field_options).fmt = "x"];
+  // Total size of the mapped segment in virtual memory.
+  optional uint64 vmsize = 5 [(yara.field_options).fmt = "x"];
+  // File offset pointing to the segment contents on disk.
+  optional uint64 fileoff = 6;
+  // Total physical length of the segment inside the file.
+  optional uint64 filesize = 7;
+  // Maximum virtual memory protection state applicable.
+  optional uint32 maxprot = 8 [(yara.field_options).fmt = "x"];
+  // Initial virtual memory protection applied at load time.
+  optional uint32 initprot = 9 [(yara.field_options).fmt = "x"];
+  // Number of sections contained inside the segment.
+  optional uint32 nsects = 10;
+  // Bitwise flags controlling segment properties.
+  optional uint32 flags = 11 [(yara.field_options).fmt = "flags:SegmentFlag"];
+  // Array of sections nested within the segment.
+  repeated Section sections = 12;
+}
+
+message FatArch {
+  // Target architecture designation of the embedded binary.
+  optional uint32 cputype = 1 [(yara.field_options).fmt = "x"];
+  // Sub-architecture designation.
+  optional uint32 cpusubtype = 2 [(yara.field_options).fmt = "x"];
+  // File offset referencing the start of the embedded binary.
+  optional uint64 offset = 3;
+  // Size in bytes of the embedded binary payload.
+  optional uint64 size = 4;
+  // Required byte alignment of the binary payload.
+  optional uint32 align = 5;
+  // Reserved internal field.
+  optional uint32 reserved = 6;
+}
+
+message File {
+  // Magic identifier indicating the file architecture.
+  optional uint32 magic = 1 [(yara.field_options).fmt = "x"];
+  // Primary architecture designation of the embedded binary.
+  optional uint32 cputype = 2 [(yara.field_options).fmt = "x"];
+  // Specific sub-architecture variant.
+  optional uint32 cpusubtype = 3 [(yara.field_options).fmt = "x"];
+  // Binary file type categorization.
+  optional uint32 filetype = 4;
+  // Total count of load commands embedded inside the header.
+  optional uint32 ncmds = 5;
+  // Combined byte size of all load commands.
+  optional uint32 sizeofcmds = 6;
+  // Bitwise flags characterizing the binary.
+  optional uint32 flags = 7 [(yara.field_options).fmt = "flags:FileFlag"];
+  // Internal reserved field.
+  optional uint32 reserved = 8;
+
+  // Number of segments parsed from the binary.
+  optional uint64 number_of_segments = 9 [(yara.field_options).deprecation_notice = {
+    text: "this field is deprecated",
+    help: "use `segments.len()` instead",
+    replacement: "segments.len()"
+  }];
+
+  // Standard path of the dynamic linker.
+  optional bytes dynamic_linker = 10;
+  // Execution entry point offset or address.
+  optional uint64 entry_point = 11;
+  // Size of the stack allocated by the loader.
+  optional uint64 stack_size = 12;
+  // Source version metadata string.
+  optional string source_version = 13;
+  // Segments nested inside the binary.
+  repeated Segment segments = 14;
+  // External dynamic libraries referenced.
+  repeated Dylib dylibs = 15;
+  // Standard run paths utilized to locate libraries.
+  repeated bytes rpaths = 16;
+  // App entitlement strings defined within the binary.
+  repeated string entitlements = 17;
+  // Basic symbol table definitions.
+  optional Symtab symtab = 18;
+  // Detailed dynamic symbol table definitions.
+  optional Dysymtab dysymtab = 19;
+  // Dynamic linker information payload.
+  optional DyldInfo dyld_info = 20;
+  // Linked code signature data representation.
+  optional LinkedItData code_signature_data = 21;
+  // Certificates verifying the code signature.
+  repeated Certificate certificates = 22;
+  // Standard UUID assigned to the binary.
+  optional string uuid = 23;
+  // Standard build version metadata.
+  optional BuildVersion build_version = 24;
+  // Minimum OS requirement specifications.
+  optional MinVersion min_version = 25;
+  // Exported symbol descriptors.
+  repeated string exports = 26;
+  // Imported symbol descriptors.
+  repeated string imports = 27;
+  // Linker options passed during binary assembly.
+  repeated bytes linker_options = 28;
+}
+
+message Macho {
+  // Magic identifier indicating the file architecture.
+  optional uint32 magic = 1 [(yara.field_options).fmt = "x"];
+  // Target architecture designation.
+  optional uint32 cputype = 2 [(yara.field_options).fmt = "x"];
+  // Specific sub-architecture variant.
+  optional uint32 cpusubtype = 3 [(yara.field_options).fmt = "x"];
+  // Categorization of the Mach-O executable.
+  optional uint32 filetype = 4;
+  // Number of load commands defined inside the binary.
+  optional uint32 ncmds = 5;
+  // Combined byte size of all load commands.
+  optional uint32 sizeofcmds = 6;
+  // Global bitwise flags characterizing the binary.
+  optional uint32 flags = 7 [(yara.field_options).fmt = "x"];
+  // Reserved padding element.
+  optional uint32 reserved = 8;
+
+  // Number of segments parsed.
+  optional uint64 number_of_segments = 9 [(yara.field_options).deprecation_notice = {
+    text: "this field is deprecated",
+    help: "use `macho.segments.len()` instead",
+    replacement: "segments.len()"
+  }];
+
+  // Standard dynamic linker specification path.
+  optional bytes dynamic_linker = 10;
+  // Execution entry point address.
+  optional uint64 entry_point = 11;
+  // Stack size allocation requested.
+  optional uint64 stack_size = 12;
+  // Build source version metadata string.
+  optional string source_version = 13;
+  // Standard symbol table block.
+  optional Symtab symtab = 14;
+  // Detailed dynamic symbol table block.
+  optional Dysymtab dysymtab = 15;
+  // Code signature data payload block.
+  optional LinkedItData code_signature_data = 16;
+  // Top-level segments parsed from the binary.
+  repeated Segment segments = 17;
+  // Linked external libraries.
+  repeated Dylib dylibs = 18;
+  // Dynamic loader metadata information block.
+  optional DyldInfo dyld_info = 19;
+  // Executable run path definition strings.
+  repeated bytes rpaths = 20;
+  // Defined app entitlement descriptor strings.
+  repeated string entitlements = 21;
+  // Cryptographic certificates validating the signature.
+  repeated Certificate certificates = 22;
+  // Binary UUID descriptor string.
+  optional string uuid = 23;
+  // General build version metadata block.
+  optional BuildVersion build_version = 24;
+  // Minimum OS version requirements.
+  optional MinVersion min_version = 25;
+  // Standard exported symbol strings.
+  repeated string exports = 26;
+  // Standard imported symbol strings.
+  repeated string imports = 27;
+  // Custom options passed directly to the linker.
+  repeated bytes linker_options = 28;
+
+  // Magic constant identifying the file as a Fat binary.
+  optional uint32 fat_magic = 29 [(yara.field_options).fmt = "x"];
+  // Total count of different architectures embedded in the Fat binary.
+  optional uint32 nfat_arch = 30;
+  // Individual descriptors for each embedded architecture.
+  repeated FatArch fat_arch = 31;
+
+  // Independent Mach-O binaries extracted from the universal Fat payload.
+  repeated File file = 32;
+}
+
+enum Header {
+  option (yara.enum_options).inline = true;
+  MH_MAGIC = 0 [(yara.enum_value).i64 = 0xfeedface];
+  MH_CIGAM = 1 [(yara.enum_value).i64 = 0xcefaedfe];
+  MH_MAGIC_64 = 2 [(yara.enum_value).i64 = 0xfeedfacf];
+  MH_CIGAM_64 = 3 [(yara.enum_value).i64 = 0xcffaedfe];
+}
+
+enum FatHeader {
+  option (yara.enum_options).inline = true;
+  FAT_MAGIC = 0 [(yara.enum_value).i64 = 0xcafebabe];
+  FAT_CIGAM = 1 [(yara.enum_value).i64 = 0xbebafeca];
+  FAT_MAGIC_64 = 2 [(yara.enum_value).i64 = 0xcafebabf];
+  FAT_CIGAM_64 = 3 [(yara.enum_value).i64 = 0xbfbafeca];
+}
+
+enum Mask64Bit {
+  option (yara.enum_options).inline = true;
+  CPU_ARCH_ABI64 = 0x01000000;
+  CPU_SUBTYPE_LIB64 = 0 [(yara.enum_value).i64 = 0x80000000];
+}
+
+enum CpuType {
+  option (yara.enum_options).inline = true;
+  CPU_TYPE_MC680X0 = 0x00000006;
+  CPU_TYPE_X86 = 0x00000007;
+  CPU_TYPE_X86_64 = 0x01000007;
+  CPU_TYPE_MIPS = 0x00000008;
+  CPU_TYPE_MC98000 = 0x0000000a;
+  CPU_TYPE_ARM = 0x0000000c;
+  CPU_TYPE_ARM64 = 0x0100000c;
+  CPU_TYPE_MC88000 = 0x0000000d;
+  CPU_TYPE_SPARC = 0x0000000e;
+  CPU_TYPE_POWERPC = 0x00000012;
+  CPU_TYPE_POWERPC64 = 0x01000012;
+}
+
+enum CpuI386Type {
+  option (yara.enum_options).inline = true;
+  CPU_TYPE_I386 = 0x00000007;
+}
+
+enum CpuIntelSubType {
+  option (yara.enum_options).inline = true;
+  CPU_SUBTYPE_INTEL_MODEL_ALL = 0x00000000;
+  CPU_SUBTYPE_386 = 0x00000003;
+  CPU_SUBTYPE_486 = 0x00000004;
+  CPU_SUBTYPE_486SX = 0x00000084;
+  CPU_SUBTYPE_586 = 0x00000005;
+  CPU_SUBTYPE_CELERON = 0x00000067;
+  CPU_SUBTYPE_CELERON_MOBILE = 0x00000077;
+  CPU_SUBTYPE_ITANIUM = 0x0000000b;
+  CPU_SUBTYPE_ITANIUM_2 = 0x0000001b;
+  CPU_SUBTYPE_XEON = 0x0000000c;
+  CPU_SUBTYPE_XEON_MP = 0x0000001c;
+}
+
+enum CpuI386SubType {
+  option (yara.enum_options).inline = true;
+  CPU_SUBTYPE_I386_ALL = 0x00000003;
+}
+
+enum CpuX86SubType {
+  option (yara.enum_options).inline = true;
+  CPU_SUBTYPE_X86_64_ALL = 0x00000003;
+}
+
+enum CpuIntelPentiumSubType {
+  option (yara.enum_options).inline = true;
+  CPU_SUBTYPE_PENT = 0x00000005;
+  CPU_SUBTYPE_PENTPRO = 0x00000016;
+  CPU_SUBTYPE_PENTII_M3 = 0x00000036;
+  CPU_SUBTYPE_PENTII_M5 = 0x00000056;
+  CPU_SUBTYPE_PENTIUM_3 = 0x00000008;
+  CPU_SUBTYPE_PENTIUM_3_M = 0x00000018;
+  CPU_SUBTYPE_PENTIUM_3_XEON = 0x00000028;
+  CPU_SUBTYPE_PENTIUM_M = 0x00000009;
+  CPU_SUBTYPE_PENTIUM_4 = 0x0000000a;
+  CPU_SUBTYPE_PENTIUM_4_M = 0x0000001a;
+}
+
+enum CpuArmSubType {
+  option (yara.enum_options).inline = true;
+  CPU_SUBTYPE_ARM_ALL = 0x00000000;
+  CPU_SUBTYPE_ARM_V4T = 0x00000005;
+  CPU_SUBTYPE_ARM_V6 = 0x00000006;
+  CPU_SUBTYPE_ARM_V5 = 0x00000007;
+  CPU_SUBTYPE_ARM_XSCALE = 0x00000008;
+  CPU_SUBTYPE_ARM_V7 = 0x00000009;
+  CPU_SUBTYPE_ARM_V7F = 0x0000000a;
+  CPU_SUBTYPE_ARM_V7S = 0x0000000b;
+  CPU_SUBTYPE_ARM_V7K = 0x0000000c;
+  CPU_SUBTYPE_ARM_V6M = 0x0000000e;
+  CPU_SUBTYPE_ARM_V7M = 0x0000000f;
+  CPU_SUBTYPE_ARM_V7EM = 0x00000010;
+}
+
+enum CpuArm64SubType {
+  option (yara.enum_options).inline = true;
+  CPU_SUBTYPE_ARM_V5TEJ = 0x00000007;
+  CPU_SUBTYPE_ARM64_ALL = 0x00000000;
+}
+
+enum CpuSparcSubType {
+  option (yara.enum_options).inline = true;
+  CPU_SUBTYPE_SPARC_ALL = 0x00000000;
+}
+
+enum CpuPowerPCSubType {
+  option (yara.enum_options).inline = true;
+  CPU_SUBTYPE_POWERPC_ALL = 0x00000000;
+  CPU_SUBTYPE_POWERPC_601 = 0x00000001;
+  CPU_SUBTYPE_POWERPC_602 = 0x00000002;
+  CPU_SUBTYPE_POWERPC_603 = 0x00000003;
+  CPU_SUBTYPE_POWERPC_603e = 0x00000004;
+  CPU_SUBTYPE_POWERPC_603ev = 0x00000005;
+  CPU_SUBTYPE_POWERPC_604 = 0x00000006;
+  CPU_SUBTYPE_POWERPC_604e = 0x00000007;
+  CPU_SUBTYPE_POWERPC_620 = 0x00000008;
+  CPU_SUBTYPE_POWERPC_750 = 0x00000009;
+  CPU_SUBTYPE_POWERPC_7400 = 0x0000000a;
+  CPU_SUBTYPE_POWERPC_7450 = 0x0000000b;
+  CPU_SUBTYPE_POWERPC_970 = 0x00000064;
+}
+
+enum CpuMcSubType {
+  option (yara.enum_options).inline = true;
+  CPU_SUBTYPE_MC980000_ALL = 0x00000000;
+  CPU_SUBTYPE_MC98601 = 0x00000001;
+}
+
+enum FileType {
+  option (yara.enum_options).inline = true;
+  MH_OBJECT = 0x00000001;
+  MH_EXECUTE = 0x00000002;
+  MH_FVMLIB = 0x00000003;
+  MH_CORE = 0x00000004;
+  MH_PRELOAD = 0x00000005;
+  MH_DYLIB = 0x00000006;
+  MH_DYLINKER = 0x00000007;
+  MH_BUNDLE = 0x00000008;
+  MH_DYLIB_STUB = 0x00000009;
+  MH_DSYM = 0x0000000a;
+  MH_KEXT_BUNDLE = 0x0000000b;
+}
+
+enum FileFlag {
+  option (yara.enum_options).inline = true;
+  MH_NOUNDEFS = 0x00000001;
+  MH_INCRLINK = 0x00000002;
+  MH_DYLDLINK = 0x00000004;
+  MH_BINDATLOAD = 0x00000008;
+  MH_PREBOUND = 0x00000010;
+  MH_SPLIT_SEGS = 0x00000020;
+  MH_LAZY_INIT = 0x00000040;
+  MH_TWOLEVEL = 0x00000080;
+  MH_FORCE_FLAT = 0x00000100;
+  MH_NOMULTIDEFS = 0x00000200;
+  MH_NOFIXPREBINDING = 0x00000400;
+  MH_PREBINDABLE = 0x00000800;
+  MH_ALLMODSBOUND = 0x00001000;
+  MH_SUBSECTIONS_VIA_SYMBOLS = 0x00002000;
+  MH_CANONICAL = 0x00004000;
+  MH_WEAK_DEFINES = 0x00008000;
+  MH_BINDS_TO_WEAK = 0x00010000;
+  MH_ALLOW_STACK_EXECUTION = 0x00020000;
+  MH_ROOT_SAFE = 0x00040000;
+  MH_SETUID_SAFE = 0x00080000;
+  MH_NO_REEXPORTED_DYLIBS = 0x00100000;
+  MH_PIE = 0x00200000;
+  MH_DEAD_STRIPPABLE_DYLIB = 0x00400000;
+  MH_HAS_TLV_DESCRIPTORS = 0x00800000;
+  MH_NO_HEAP_EXECUTION = 0x01000000;
+  MH_APP_EXTENSION_SAFE = 0x02000000;
+}
+
+enum SegmentFlag {
+  option (yara.enum_options).inline = true;
+  SG_HIGHVM = 0x00000001;
+  SG_FVMLIB = 0x00000002;
+  SG_NORELOC = 0x00000004;
+  SG_PROTECTED_VERSION_1 = 0x00000008;
+}
+
+enum SectionFlagMask {
+  option (yara.enum_options).inline = true;
+  SECTION_TYPE = 0x000000ff;
+  SECTION_ATTRIBUTES = 0 [(yara.enum_value).i64 = 0xffffff00];
+}
+
+enum SectionType {
+  option (yara.enum_options).inline = true;
+  S_REGULAR = 0x00000000;
+  S_ZEROFILL = 0x00000001;
+  S_CSTRING_LITERALS = 0x00000002;
+  S_4BYTE_LITERALS = 0x00000003;
+  S_8BYTE_LITERALS = 0x00000004;
+  S_LITERAL_POINTERS = 0x00000005;
+  S_NON_LAZY_SYMBOL_POINTERS = 0x00000006;
+  S_LAZY_SYMBOL_POINTERS = 0x00000007;
+  S_SYMBOL_STUBS = 0x00000008;
+  S_MOD_INIT_FUNC_POINTERS = 0x00000009;
+  S_MOD_TERM_FUNC_POINTERS = 0x0000000a;
+  S_COALESCED = 0x0000000b;
+  S_GB_ZEROFILL = 0x0000000c;
+  S_INTERPOSING = 0x0000000d;
+  S_16BYTE_LITERALS = 0x0000000e;
+  S_DTRACE_DOF = 0x0000000f;
+  S_LAZY_DYLIB_SYMBOL_POINTERS = 0x00000010;
+  S_THREAD_LOCAL_REGULAR = 0x00000011;
+  S_THREAD_LOCAL_ZEROFILL = 0x00000012;
+  S_THREAD_LOCAL_VARIABLES = 0x00000013;
+  S_THREAD_LOCAL_VARIABLE_POINTERS = 0x00000014;
+  S_THREAD_LOCAL_INIT_FUNCTION_POINTERS = 0x00000015;
+}
+
+enum SectionAttributes {
+  option (yara.enum_options).inline = true;
+  S_ATTR_PURE_INSTRUCTIONS = 0 [(yara.enum_value).i64 = 0x80000000];
+  S_ATTR_NO_TOC = 0x40000000;
+  S_ATTR_STRIP_STATIC_SYMS = 0x20000000;
+  S_ATTR_NO_DEAD_STRIP = 0x10000000;
+  S_ATTR_LIVE_SUPPORT = 0x08000000;
+  S_ATTR_SELF_MODIFYING_CODE = 0x04000000;
+  S_ATTR_DEBUG = 0x02000000;
+  S_ATTR_SOME_INSTRUCTIONS = 0x00000400;
+  S_ATTR_EXT_RELOC = 0x00000200;
+  S_ATTR_LOC_RELOC = 0x00000100;
+}
+
+enum DeviceType {
+  option (yara.enum_options).inline = true;
+  MACOSX = 0x00000024;
+  IPHONEOS = 0x00000025;
+  TVOS = 0x0000002f;
+  WATCHOS = 0x00000030;
+}

@@ -1,0 +1,11 @@
+warning[bool_int_comparison]: comparison between boolean and integer
+ --> line:4:13
+  |
+4 |  condition: test_proto2.array_bool[0] == 0
+  |             ------------------------------ this is comparing an integer and a boolean
+  |
+help: consider the following change
+  |
+4 -  condition: test_proto2.array_bool[0] == 0
+4 +  condition: not test_proto2.array_bool[0]
+  |

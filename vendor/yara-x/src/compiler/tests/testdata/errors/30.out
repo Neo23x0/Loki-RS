@@ -1,0 +1,5 @@
+error[E010]: unknown module `foo`
+ --> line:1:1
+  |
+1 | import "foo"
+  | ^^^^^^^^^^^^ module `foo` not found
