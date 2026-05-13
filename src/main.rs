@@ -23,9 +23,9 @@ struct Cli {
     // SCAN TARGET
     // =========================================================================
     
-    /// Folder to scan (default: entire system)
-    #[arg(short = 'f', long, help_heading = "Scan Target")]
-    folder: Option<String>,
+    /// Folder(s) to scan; can be specified multiple times. Ignored if --scan-hard-drives or --scan-all-drives is used.
+	#[arg(short = 'f', long, help_heading = "Scan Target")]
+	folder: Vec<String>,
 
     // =========================================================================
     // SCAN CONTROL
@@ -1253,45 +1253,64 @@ fn main() {
     };
     
     // Determine target folders to scan
-    let target_folders: Vec<String> = if scan_config.scan_hard_drives || scan_config.scan_all_drives {
-        // Enumerate drives/mounts based on flags
-        let enumerated = enumerate_drives(scan_config.scan_hard_drives, scan_config.scan_all_drives);
-        if enumerated.is_empty() {
-            // Fallback to default if enumeration fails
-            let mut default: String = '/'.to_string();
-            if get_os_type() == "windows" { default = "C:\\".to_string(); }
-            vec![default]
-        } else {
-            if scan_config.scan_hard_drives {
-                logger.info(&format!("Detected {} hard drive(s): {}", 
-                    enumerated.len(), 
-                    enumerated.join(", ")));
-            } else {
-                logger.info(&format!("Found {} drive(s)/mount(s) to scan: {}", 
-                    enumerated.len(), 
-                    enumerated.join(", ")));
-            }
-            enumerated
-        }
-    } else {
-        // Use single folder (default or specified)
-        let mut single_folder: String = '/'.to_string(); 
-        if get_os_type() == "windows" { single_folder = "C:\\".to_string(); }
-        if let Some(ref args_target_folder) = args.folder {
-            single_folder = args_target_folder.clone();
-        }
-        vec![single_folder]
-    };
+	let mut target_folders: Vec<String> = if scan_config.scan_hard_drives || scan_config.scan_all_drives {
+		// Enumerate drives/mounts based on flags
+		let enumerated = enumerate_drives(scan_config.scan_hard_drives, scan_config.scan_all_drives);
+		if enumerated.is_empty() {
+			// Fallback to default if enumeration fails
+			let default = if get_os_type() == "windows" {
+				"C:\\".to_string()
+			} else {
+				"/".to_string()
+			};
+			vec![default]
+		} else {
+			if scan_config.scan_hard_drives {
+				logger.info(&format!(
+					"Detected {} hard drive(s): {}",
+					enumerated.len(),
+					enumerated.join(", ")
+				));
+			} else {
+				logger.info(&format!(
+					"Found {} drive(s)/mount(s) to scan: {}",
+					enumerated.len(),
+					enumerated.join(", ")
+				));
+			}
+			enumerated
+		}
+	} else if !args.folder.is_empty() {
+		args.folder.clone()
+	} else {
+		vec![if get_os_type() == "windows" {
+			"C:\\".to_string()
+		} else {
+			"/".to_string()
+		}]
+	};
+
+	// Remove duplicates while preserving simple deterministic ordering
+	target_folders.sort();
+	target_folders.dedup();
     
     // For TUI, use "All Drives" when scanning hard drives, otherwise use first target folder (or default)
-    let target_folder = if scan_config.scan_hard_drives {
-        "All Drives".to_string()
-    } else {
-        target_folders.first().cloned().unwrap_or_else(|| {
-            if get_os_type() == "windows" { "C:\\".to_string() } else { "/".to_string() }
-        })
-    };
-    
+   let target_folder = if scan_config.scan_hard_drives || scan_config.scan_all_drives {
+    "All Drives".to_string()
+	} else if target_folders.len() == 1 {
+		target_folders.first().cloned().unwrap_or_else(|| {
+			if get_os_type() == "windows" {
+				"C:\\".to_string()
+			} else {
+            "/".to_string()
+			}
+		})
+	} else {
+    format!("{} folders", target_folders.len())
+	};
+   
+   
+   
     // Print scan configuration limits
     logger.info_w("Scan limits", &[
         ("MAX_FILE_SIZE", &format!("{} bytes ({:.1} MB)", scan_config.max_file_size, scan_config.max_file_size as f64 / 1_000_000.0)),
@@ -1462,9 +1481,11 @@ fn main() {
                      if target_folders.len() > 1 {
                          logger.info(&format!("Scanning drive/mount {} of {}: {}", 
                              idx + 1, target_folders.len(), folder));
-                     } else {
+                     } else if scan_config.scan_hard_drives || scan_config.scan_all_drives{
                          logger.info("Scanning local file system ... ");
-                     }
+                     } else { 
+						 logger.info(&format!("Scanning target folder: {}", folder));
+					 }
                      
                      let context = ScanContext {
                          compiled_rules: &compiled_rules,

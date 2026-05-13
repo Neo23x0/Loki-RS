@@ -8,6 +8,7 @@ use rayon::current_thread_index;
 pub struct ScanState {
     pub current_elements: DashMap<usize, String>,
     pub files_scanned: AtomicUsize,
+    pub files_seen: AtomicUsize,
     pub processes_scanned: AtomicUsize,
     pub skipped: AtomicUsize,
     pub alerts: AtomicUsize,
@@ -30,23 +31,24 @@ impl ScanState {
     }
 
     pub fn with_cpu_limit(cpu_limit: u8) -> Self {
-        Self {
-            current_elements: DashMap::new(),
-            files_scanned: AtomicUsize::new(0),
-            processes_scanned: AtomicUsize::new(0),
-            skipped: AtomicUsize::new(0),
-            alerts: AtomicUsize::new(0),
-            warnings: AtomicUsize::new(0),
-            notices: AtomicUsize::new(0),
-            errors: AtomicUsize::new(0),
-            start_time: Instant::now(),
-            should_exit: AtomicBool::new(false),
-            menu_active: AtomicBool::new(false),
-            cpu_limit: AtomicU8::new(cpu_limit.clamp(1, 100)),
-            is_paused: AtomicBool::new(false),
-            skip_generation: AtomicU64::new(0),
-        }
+    Self {
+        current_elements: DashMap::new(),
+        files_scanned: AtomicUsize::new(0),
+        files_seen: AtomicUsize::new(0),
+        processes_scanned: AtomicUsize::new(0),
+        skipped: AtomicUsize::new(0),
+        alerts: AtomicUsize::new(0),
+        warnings: AtomicUsize::new(0),
+        notices: AtomicUsize::new(0),
+        errors: AtomicUsize::new(0),
+        start_time: Instant::now(),
+        should_exit: AtomicBool::new(false),
+        menu_active: AtomicBool::new(false),
+        cpu_limit: AtomicU8::new(cpu_limit.clamp(1, 100)),
+        is_paused: AtomicBool::new(false),
+        skip_generation: AtomicU64::new(0),
     }
+}
 
     pub fn set_current_element(&self, element: String) {
         if let Some(idx) = current_thread_index() {
@@ -59,10 +61,13 @@ impl ScanState {
             self.current_elements.remove(&idx);
         }
     }
+	pub fn increment_files(&self) {
+    self.files_scanned.fetch_add(1, Ordering::Relaxed);
+}
 
-    pub fn increment_files(&self) {
-        self.files_scanned.fetch_add(1, Ordering::Relaxed);
-    }
+	pub fn increment_files_seen(&self) {
+		self.files_seen.fetch_add(1, Ordering::Relaxed);
+	}
     
     pub fn increment_processes(&self) {
         self.processes_scanned.fetch_add(1, Ordering::Relaxed);
