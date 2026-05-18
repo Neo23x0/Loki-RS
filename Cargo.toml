@@ -16,11 +16,11 @@ path = "src/loki_util/main.rs"
 [dependencies]
 log = "0.4.29"
 walkdir = "2.5.0"
-clap = { version = "4.5.57", features = ["derive"] }
+clap = { version = "4.6.0", features = ["derive"] }
 arrayvec = "0.7.6"
 flexi_logger = "0.31.8"
 colored = "3.1.1"
-sysinfo = "0.38.1"
+sysinfo = "0.38.4"
 human_bytes = "0.4.3"
 filesize = "0.2.0"
 file-format = "0.28.0"
@@ -29,8 +29,8 @@ md5 = "0.8.0"
 sha1 = "0.10.6"
 sha2 = "0.10.9"
 hex = "0.4.3"
-memmap2 = "0.9.9"
-chrono = { version = "0.4.43", features = ["serde"] }
+memmap2 = "0.9.10"
+chrono = { version = "0.4.44", features = ["serde"] }
 regex = "1.12.3"
 yara-x = "1.16.0"
 zip = { version = "7.0", default-features = false, features = [
@@ -47,9 +47,9 @@ serde_json = "1.0.149"
 rayon = "1.11.0"
 num_cpus = "1.17.0"
 netstat2 = "0.11.2"
-ctrlc = "3.5.1"
+ctrlc = "3.5.2"
 dashmap = "6.1.0"
-ureq = { version = "3.2.0", features = ["json"] }
+ureq = { version = "3.2.1", features = ["json"] }
 dialoguer = "0.12.0"
 ratatui = "0.30.0"
 crossterm = "0.29.0"
