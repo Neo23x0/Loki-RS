@@ -55,6 +55,11 @@ Options:
 ./build/loki -f /path/to/scan
 ```
 
+### Scan a Windows directory with spaces:
+```powershell
+.\loki.exe -f "J:\SteamLibrary\steamapps\common\SpaceCraft beta"
+```
+
 ### Scan with debug output:
 ```bash
 ./build/loki -d -f /path/to/scan
@@ -225,4 +230,3 @@ See `README.md` for detailed build instructions and requirements.
 ## License
 
 See `LICENSE` file for license information.
-

@@ -89,7 +89,7 @@ sudo ./loki --remote syslog-host.internal:514 --remote-proto udp
 ### Scan Target
 | Option | Default | Description |
 |--------|---------|-------------|
-| `-f, --folder <PATH>` | `/` | Folder to scan |
+| `-f, --folder <PATH>` | `/` | Folder to scan. Quote paths containing spaces, e.g. `-f "J:\SteamLibrary\steamapps\common\SpaceCraft beta"` |
 
 ### Scan Control
 | Option | Default | Description |
