@@ -48,7 +48,7 @@ Signatures ship with the release but get stale quickly. Run `loki-util update` t
 
 ## Signatures
 
-Loki-RS uses [YARA Forge](https://yaraforge.com/) as its default signature source. Loki-RS ships and updates with the **Core** rule set (high accuracy, low false positives, optimized for performance). If you need broader coverage, you can swap in the Extended or Full sets from YARA Forge.
+Loki-RS uses [YARA Forge](https://yarahq.github.io/) as its default signature source. Loki-RS ships and updates with the **Core** rule set (high accuracy, low false positives, optimized for performance). If you need broader coverage, you can swap in the Extended or Full sets from YARA Forge.
 
 IOC files in `signatures/iocs/` remain supported as optional local/custom content.
 
