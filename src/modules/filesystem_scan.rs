@@ -17,6 +17,9 @@ use yara_x::{Scanner, Rules};
 use rayon::prelude::*;
 use zip::ZipArchive;
 
+const MAX_ARCHIVE_ENTRIES: usize = 10_000;
+const MAX_ARCHIVE_TOTAL_UNCOMPRESSED_BYTES: u64 = 512 * 1024 * 1024;
+
 #[cfg(windows)]
 use windows::core::{PCWSTR, HSTRING};
 #[cfg(windows)]
@@ -790,24 +793,59 @@ fn process_file_entry(
 
         match ZipArchive::new(Cursor::new(&mmap)) {
             Ok(mut archive) => {
+                let mut archive_entries_scanned = 0usize;
+                let mut archive_bytes_scanned = 0u64;
+
                 for i in 0..archive.len() {
                     if let Ok(mut zfile) = archive.by_index(i) {
-                        if zfile.is_file() && zfile.size() < scan_config.max_file_size as u64 {
-                            let mut buffer = Vec::with_capacity(zfile.size() as usize);
-                            if zfile.read_to_end(&mut buffer).is_ok() {
-                                let entry_name = zfile.name().to_string();
-                                let display_path = format!("{}->{}", file_path_str, entry_name);
-                                let ext = Path::new(&entry_name).extension().map(|e| e.to_string_lossy()).unwrap_or_default();
-                                
-                                let (s, m, a, w, n) = scan_memory_buffer(
-                                    &buffer, &display_path, &entry_name, &ext, "ARCHIVE_ENTRY",
-                                    (0, 0, 0), // Timestamps inside zip? zfile.last_modified()
-                                    compiled_rules, scan_config, hash_collections, fp_hash_collections, filename_iocs,
-                                    logger, scan_state, 
-                                    Some(&container_info), Some(&file_path_str)
-                                );
-                                files_scanned += s; files_matched += m; alert_count += a; warning_count += w; notice_count += n;
+                        if !zfile.is_file() {
+                            continue;
+                        }
+
+                        match archive_entry_scan_decision(
+                            zfile.size(),
+                            archive_entries_scanned,
+                            archive_bytes_scanned,
+                            scan_config.max_file_size as u64,
+                        ) {
+                            ArchiveEntryScanDecision::Scan => {}
+                            ArchiveEntryScanDecision::SkipOversized => continue,
+                            ArchiveEntryScanDecision::StopEntryLimit => {
+                                logger.warning(&format!(
+                                    "Stopping ZIP archive scan after {} entries: {}",
+                                    archive_entries_scanned,
+                                    file_path_str
+                                ));
+                                break;
                             }
+                            ArchiveEntryScanDecision::StopTotalSizeLimit => {
+                                logger.warning(&format!(
+                                    "Stopping ZIP archive scan after {} uncompressed bytes: {}",
+                                    archive_bytes_scanned,
+                                    file_path_str
+                                ));
+                                break;
+                            }
+                        }
+
+                        let entry_size = zfile.size();
+                        let mut buffer = Vec::with_capacity(entry_size as usize);
+                        if zfile.read_to_end(&mut buffer).is_ok() {
+                            archive_entries_scanned += 1;
+                            archive_bytes_scanned = archive_bytes_scanned.saturating_add(buffer.len() as u64);
+
+                            let entry_name = zfile.name().to_string();
+                            let display_path = format!("{}->{}", file_path_str, entry_name);
+                            let ext = Path::new(&entry_name).extension().map(|e| e.to_string_lossy()).unwrap_or_default();
+
+                            let (s, m, a, w, n) = scan_memory_buffer(
+                                &buffer, &display_path, &entry_name, &ext, "ARCHIVE_ENTRY",
+                                (0, 0, 0), // Timestamps inside zip? zfile.last_modified()
+                                compiled_rules, scan_config, hash_collections, fp_hash_collections, filename_iocs,
+                                logger, scan_state,
+                                Some(&container_info), Some(&file_path_str)
+                            );
+                            files_scanned += s; files_matched += m; alert_count += a; warning_count += w; notice_count += n;
                         }
                     }
                 }
@@ -818,6 +856,35 @@ fn process_file_entry(
 
     if let Some(state) = scan_state { state.clear_current_element(); }
     (files_scanned, files_matched, alert_count, warning_count, notice_count)
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum ArchiveEntryScanDecision {
+    Scan,
+    SkipOversized,
+    StopEntryLimit,
+    StopTotalSizeLimit,
+}
+
+fn archive_entry_scan_decision(
+    entry_size: u64,
+    entries_scanned: usize,
+    bytes_scanned: u64,
+    max_file_size: u64,
+) -> ArchiveEntryScanDecision {
+    if entries_scanned >= MAX_ARCHIVE_ENTRIES {
+        return ArchiveEntryScanDecision::StopEntryLimit;
+    }
+
+    if entry_size > max_file_size {
+        return ArchiveEntryScanDecision::SkipOversized;
+    }
+
+    if bytes_scanned.saturating_add(entry_size) > MAX_ARCHIVE_TOTAL_UNCOMPRESSED_BYTES {
+        return ArchiveEntryScanDecision::StopTotalSizeLimit;
+    }
+
+    ArchiveEntryScanDecision::Scan
 }
 
 fn scan_memory_buffer(
@@ -1338,6 +1405,47 @@ mod tests {
             assert_eq!(info.md5.len(), 32);
             assert_eq!(info.sha1.len(), 40);
             assert_eq!(info.sha256.len(), 64);
+        }
+    }
+
+    mod archive_limit_tests {
+        use super::*;
+
+        #[test]
+        fn test_archive_entry_scan_decision_allows_normal_entry() {
+            assert_eq!(
+                archive_entry_scan_decision(1024, 0, 0, 10 * 1024),
+                ArchiveEntryScanDecision::Scan
+            );
+        }
+
+        #[test]
+        fn test_archive_entry_scan_decision_skips_oversized_entry() {
+            assert_eq!(
+                archive_entry_scan_decision(20 * 1024, 0, 0, 10 * 1024),
+                ArchiveEntryScanDecision::SkipOversized
+            );
+        }
+
+        #[test]
+        fn test_archive_entry_scan_decision_stops_on_entry_limit() {
+            assert_eq!(
+                archive_entry_scan_decision(1024, MAX_ARCHIVE_ENTRIES, 0, 10 * 1024),
+                ArchiveEntryScanDecision::StopEntryLimit
+            );
+        }
+
+        #[test]
+        fn test_archive_entry_scan_decision_stops_on_total_size_limit() {
+            assert_eq!(
+                archive_entry_scan_decision(
+                    2,
+                    0,
+                    MAX_ARCHIVE_TOTAL_UNCOMPRESSED_BYTES,
+                    10 * 1024
+                ),
+                ArchiveEntryScanDecision::StopTotalSizeLimit
+            );
         }
     }
 

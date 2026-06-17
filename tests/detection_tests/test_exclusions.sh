@@ -19,8 +19,9 @@ register_cleanup
 PROJECT_ROOT=$(get_project_root)
 cd "$PROJECT_ROOT"
 
-# Config file location
-CONFIG_FILE="$PROJECT_ROOT/build/config/excludes.cfg"
+# Config file location used by Loki at runtime
+CONFIG_FILE="$PROJECT_ROOT/config/excludes.cfg"
+mkdir -p "$(dirname "$CONFIG_FILE")"
 
 section "Setup Test Environment"
 
@@ -120,4 +121,3 @@ else
     echo "=== Exclusion Configuration Test: FAIL ==="
     exit 1
 fi
-

@@ -19,8 +19,9 @@ register_cleanup
 PROJECT_ROOT=$(get_project_root)
 cd "$PROJECT_ROOT"
 
-# Config file location
-CONFIG_FILE="$PROJECT_ROOT/build/config/excludes.cfg"
+# Config file location used by Loki at runtime
+CONFIG_FILE="$PROJECT_ROOT/config/excludes.cfg"
+mkdir -p "$(dirname "$CONFIG_FILE")"
 
 section "Setup Test Environment"
 
@@ -59,7 +60,7 @@ if echo "$TEST_OUTPUT" | grep -qiE "exclusion.*:.*0|0.*exclusion"; then
     echo "$TEST_OUTPUT" | grep -iE "exclusion" | head -3 | sed 's/^/    /'
 else
     echo "  Searching for exclusion info in output:"
-    echo "$TEST_OUTPUT" | grep -iE "(exclusion|config)" | head -5 | sed 's/^/    /'
+    echo "$TEST_OUTPUT" | grep -iE "(exclusion|config)" | head -5 | sed 's/^/    /' || true
 fi
 
 section "Test 2: Config with 3 exclusion patterns"
@@ -91,7 +92,7 @@ elif echo "$TEST_OUTPUT" | grep -qiE "exclusion.*:.*[1-9]|[1-9].*exclusion"; the
     echo "$TEST_OUTPUT" | grep -iE "exclusion" | head -3 | sed 's/^/    /'
 else
     echo "  Searching for exclusion info in output:"
-    echo "$TEST_OUTPUT" | grep -iE "(exclusion|config|pattern)" | head -5 | sed 's/^/    /'
+    echo "$TEST_OUTPUT" | grep -iE "(exclusion|config|pattern)" | head -5 | sed 's/^/    /' || true
 fi
 
 section "Test 3: Verify exclusion count is reported in scan info"
@@ -100,7 +101,7 @@ section "Test 3: Verify exclusion count is reported in scan info"
 if echo "$TEST_OUTPUT" | grep -qiE "(Configuration|Scan limits|Settings)"; then
     echo -e "${GREEN}✓ Configuration/settings section found${NC}"
     echo "  Relevant output:"
-    echo "$TEST_OUTPUT" | grep -iE "(configuration|limits|exclusion|setting)" | head -10 | sed 's/^/    /'
+    echo "$TEST_OUTPUT" | grep -iE "(configuration|limits|exclusion|setting)" | head -10 | sed 's/^/    /' || true
 else
     echo "  Output does not explicitly show configuration section"
 fi
@@ -125,4 +126,3 @@ else
     echo "=== Exclusion Count Test: FAIL ==="
     exit 1
 fi
-
