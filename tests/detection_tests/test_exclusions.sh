@@ -23,6 +23,30 @@ cd "$PROJECT_ROOT"
 CONFIG_FILE="$PROJECT_ROOT/config/excludes.cfg"
 mkdir -p "$(dirname "$CONFIG_FILE")"
 
+CONFIG_EXISTED=false
+CONFIG_RESTORED=false
+
+restore_excludes_config() {
+    if [ "$CONFIG_RESTORED" = true ]; then
+        return
+    fi
+
+    if [ -f "${CONFIG_FILE}.test_backup" ]; then
+        mv "${CONFIG_FILE}.test_backup" "$CONFIG_FILE"
+    elif [ "$CONFIG_EXISTED" = false ]; then
+        rm -f "$CONFIG_FILE"
+    fi
+
+    CONFIG_RESTORED=true
+}
+
+# Restore config on exit (covers both backup-restore and temp-config removal)
+# Replaces the default cleanup trap from register_cleanup
+trap '{
+    restore_excludes_config
+    teardown_temp_dir
+}' EXIT
+
 section "Setup Test Environment"
 
 # Create a test directory with a unique name we can exclude
@@ -36,10 +60,9 @@ echo "Created test file: $TEST_FILE"
 
 # Backup the original config
 if [ -f "$CONFIG_FILE" ]; then
+    CONFIG_EXISTED=true
     backup_file "$CONFIG_FILE"
-    ORIGINAL_CONFIG=$(cat "$CONFIG_FILE")
 else
-    ORIGINAL_CONFIG=""
     echo "# LOKI2 Exclusions Configuration" > "$CONFIG_FILE"
 fi
 
@@ -103,12 +126,7 @@ fi
 
 section "Cleanup: Restore original config"
 
-# Restore original config
-if [ -n "$ORIGINAL_CONFIG" ]; then
-    echo "$ORIGINAL_CONFIG" > "$CONFIG_FILE"
-else
-    restore_file "$CONFIG_FILE"
-fi
+restore_excludes_config
 echo "Config restored"
 
 section "Test Results"

@@ -828,12 +828,15 @@ fn process_file_entry(
                             }
                         }
 
+                        // Count the entry and reserve its uncompressed-size budget *before*
+                        // attempting read_to_end, so a malformed ZIP with many entries
+                        // that fail to read cannot bypass the entry-count / total-size limits.
                         let entry_size = zfile.size();
+                        archive_entries_scanned += 1;
+                        archive_bytes_scanned = archive_bytes_scanned.saturating_add(entry_size);
+
                         let mut buffer = Vec::with_capacity(entry_size as usize);
                         if zfile.read_to_end(&mut buffer).is_ok() {
-                            archive_entries_scanned += 1;
-                            archive_bytes_scanned = archive_bytes_scanned.saturating_add(buffer.len() as u64);
-
                             let entry_name = zfile.name().to_string();
                             let display_path = format!("{}->{}", file_path_str, entry_name);
                             let ext = Path::new(&entry_name).extension().map(|e| e.to_string_lossy()).unwrap_or_default();

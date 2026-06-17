@@ -22,3 +22,4 @@ build/
 config/excludes.cfg
 loki-logs/*
 .claude/settings.local.json
+loki_rune_*.jsonl

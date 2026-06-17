@@ -23,6 +23,30 @@ cd "$PROJECT_ROOT"
 CONFIG_FILE="$PROJECT_ROOT/config/excludes.cfg"
 mkdir -p "$(dirname "$CONFIG_FILE")"
 
+CONFIG_EXISTED=false
+CONFIG_RESTORED=false
+
+restore_excludes_config() {
+    if [ "$CONFIG_RESTORED" = true ]; then
+        return
+    fi
+
+    if [ -f "${CONFIG_FILE}.test_backup" ]; then
+        mv "${CONFIG_FILE}.test_backup" "$CONFIG_FILE"
+    elif [ "$CONFIG_EXISTED" = false ]; then
+        rm -f "$CONFIG_FILE"
+    fi
+
+    CONFIG_RESTORED=true
+}
+
+# Restore config on exit (covers both backup-restore and temp-config removal)
+# Replaces the default cleanup trap from register_cleanup
+trap '{
+    restore_excludes_config
+    teardown_temp_dir
+}' EXIT
+
 section "Setup Test Environment"
 
 # Create a simple test directory
@@ -32,8 +56,8 @@ echo "test" > "$TEST_DIR/test.txt"
 
 # Backup original config
 if [ -f "$CONFIG_FILE" ]; then
+    CONFIG_EXISTED=true
     backup_file "$CONFIG_FILE"
-    ORIGINAL_CONFIG=$(cat "$CONFIG_FILE")
 fi
 
 section "Test 1: Empty exclusion config (0 exclusions)"
@@ -108,13 +132,8 @@ fi
 
 section "Cleanup: Restore original config"
 
-# Restore original config
-if [ -n "${ORIGINAL_CONFIG:-}" ]; then
-    echo "$ORIGINAL_CONFIG" > "$CONFIG_FILE"
-    echo "Restored original config"
-else
-    restore_file "$CONFIG_FILE"
-fi
+restore_excludes_config
+echo "Restored original config"
 
 section "Test Results"
 
