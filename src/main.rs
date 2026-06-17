@@ -3,8 +3,8 @@ mod modules;
 
 use std::fs;
 use std::sync::Arc;
-use std::io::{Read, Write};
-use std::path::PathBuf;
+use std::io::Read;
+use std::path::{Path, PathBuf};
 use clap::Parser;
 use arrayvec::ArrayVec;
 use csv::ReaderBuilder;
@@ -612,7 +612,7 @@ fn initialize_c2_iocs(logger: &UnifiedLogger) -> Vec<C2IOC> {
 }
 
 // Check if a remote address matches any C2 IOC
-// Supports IP exact match, CIDR match, and domain substring match
+// Supports IP exact match and domain/subdomain match
 pub fn check_c2_match<'a>(remote_addr: &str, c2_iocs: &'a [C2IOC]) -> Option<&'a C2IOC> {
     let remote_lower = remote_addr.to_lowercase();
     
@@ -625,16 +625,28 @@ pub fn check_c2_match<'a>(remote_addr: &str, c2_iocs: &'a [C2IOC]) -> Option<&'a
             }
             // TODO: CIDR match (would need ipnet crate)
             // For now, we'll do exact match only
-        } else {
-            // For domains: check if remote ends with the IOC domain
+        } else if domain_matches_ioc(&remote_lower, &c2_ioc.server) {
+            // For domains: exact match or dot-boundary subdomain match
             // e.g., "dga1.evildomain.com" matches IOC "evildomain.com"
-            if remote_lower.ends_with(&c2_ioc.server) || remote_lower == c2_ioc.server {
-                return Some(c2_ioc);
-            }
+            return Some(c2_ioc);
         }
     }
     
     None
+}
+
+fn domain_matches_ioc(remote_addr: &str, c2_server: &str) -> bool {
+    let remote_domain = remote_addr.trim_end_matches('.');
+    let c2_domain = c2_server.trim_start_matches('.').trim_end_matches('.').to_lowercase();
+
+    if c2_domain.is_empty() {
+        return false;
+    }
+
+    remote_domain == c2_domain
+        || remote_domain
+            .strip_suffix(&c2_domain)
+            .is_some_and(|prefix| prefix.ends_with('.'))
 }
 
 // Simple IP address check (IPv4)
@@ -962,9 +974,10 @@ fn welcome_message() {
     println!("------------------------------------------------------------------------");
 }
 
-/// Lock file guard to prevent multiple Loki instances from running simultaneously
+/// Lock directory guard to prevent multiple Loki instances from running simultaneously
 struct LockFile {
     path: PathBuf,
+    created: bool,
 }
 
 impl LockFile {
@@ -972,9 +985,16 @@ impl LockFile {
     fn acquire() -> Option<Self> {
         let lock_path = Self::get_lock_path();
         
-        // Check if lock file exists and if the process is still running
+        // Check if lock directory exists and if the process is still running.
         if lock_path.exists() {
-            if let Ok(mut file) = fs::File::open(&lock_path) {
+            match fs::symlink_metadata(&lock_path) {
+                Ok(metadata) if metadata.file_type().is_dir() => {}
+                Ok(_) => return None,
+                Err(_) => return None,
+            }
+
+            let pid_path = lock_path.join("pid");
+            if let Ok(mut file) = fs::File::open(&pid_path) {
                 let mut pid_str = String::new();
                 if file.read_to_string(&mut pid_str).is_ok() {
                     if let Ok(pid) = pid_str.trim().parse::<u32>() {
@@ -984,25 +1004,33 @@ impl LockFile {
                     }
                 }
             }
-            // Stale lock file - remove it
-            let _ = fs::remove_file(&lock_path);
+            // Stale lock directory - remove it
+            let _ = fs::remove_dir_all(&lock_path);
         }
         
-        // Create new lock file with our PID
-        if let Ok(mut file) = fs::File::create(&lock_path) {
-            let pid = std::process::id();
-            if file.write_all(pid.to_string().as_bytes()).is_ok() {
-                return Some(LockFile { path: lock_path });
+        // Create a lock directory atomically. This avoids following attacker-controlled
+        // symlinks in a world-writable temp directory.
+        match fs::create_dir(&lock_path) {
+            Ok(()) => {
+                let pid_path = lock_path.join("pid");
+                let pid = std::process::id();
+                if fs::write(&pid_path, pid.to_string()).is_err() {
+                    let _ = fs::remove_dir_all(&lock_path);
+                    return Some(LockFile { path: lock_path, created: false });
+                }
+                Some(LockFile { path: lock_path, created: true })
             }
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => None,
+            Err(_) => Some(LockFile { path: lock_path, created: false }),
         }
-        
-        // Failed to create lock file - allow running anyway (e.g., read-only filesystem)
-        Some(LockFile { path: lock_path })
     }
     
     fn get_lock_path() -> PathBuf {
-        let temp_dir = std::env::temp_dir();
-        temp_dir.join("loki-rs.lock")
+        Self::lock_path_for_temp_dir(&std::env::temp_dir())
+    }
+
+    fn lock_path_for_temp_dir(temp_dir: &Path) -> PathBuf {
+        temp_dir.join("loki-rs.lock.d")
     }
     
     #[cfg(unix)]
@@ -1032,8 +1060,10 @@ impl LockFile {
 
 impl Drop for LockFile {
     fn drop(&mut self) {
-        // Clean up lock file when the program exits
-        let _ = fs::remove_file(&self.path);
+        // Clean up lock directory when the program exits
+        if self.created {
+            let _ = fs::remove_dir_all(&self.path);
+        }
     }
 }
 
@@ -1723,10 +1753,35 @@ mod tests {
         }
 
         #[test]
+        fn test_c2_domain_suffix_requires_dot_boundary() {
+            let c2_iocs = create_test_c2_iocs();
+
+            assert!(check_c2_match("notevil.com", &c2_iocs).is_none());
+            assert!(check_c2_match("definitely-evil.com", &c2_iocs).is_none());
+        }
+
+        #[test]
         fn test_c2_case_insensitive() {
             let c2_iocs = create_test_c2_iocs();
             let result = check_c2_match("EVIL.COM", &c2_iocs);
             assert!(result.is_some());
+        }
+
+        #[test]
+        fn test_c2_trailing_dot_match() {
+            let c2_iocs = create_test_c2_iocs();
+            let result = check_c2_match("dga.evil.com.", &c2_iocs);
+            assert!(result.is_some());
+        }
+    }
+
+    mod lock_file_tests {
+        use super::*;
+
+        #[test]
+        fn test_lock_uses_private_directory_name() {
+            let lock_path = LockFile::lock_path_for_temp_dir(Path::new("/tmp"));
+            assert_eq!(lock_path, Path::new("/tmp").join("loki-rs.lock.d"));
         }
     }
 

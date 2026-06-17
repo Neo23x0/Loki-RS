@@ -1831,23 +1831,26 @@ fn render_finding_card(finding: &LogEvent, idx: usize) -> String {
     }
     
     if let Some(ref md5) = finding.md5 {
+        let md5_filter = js_string_for_html_attr(md5);
         details_html.push_str(&format!(
-            r#"<div class="detail-item-hash"><span class="detail-label">MD5:</span> <a href="https://www.virustotal.com/gui/search/{}" target="_blank" class="detail-value hash-link" title="Search on VirusTotal">{}</a><button class="filter-btn-inline" onclick="filterValue('{}', event)" title="Filter out this hash">✖</button></div>"#,
-            html_escape(md5), html_escape(md5), html_escape(md5)
+            r#"<div class="detail-item-hash"><span class="detail-label">MD5:</span> <a href="https://www.virustotal.com/gui/search/{}" target="_blank" class="detail-value hash-link" title="Search on VirusTotal">{}</a><button class="filter-btn-inline" onclick="filterValue({}, event)" title="Filter out this hash">✖</button></div>"#,
+            html_escape(md5), html_escape(md5), md5_filter
         ));
     }
     
     if let Some(ref sha1) = finding.sha1 {
+        let sha1_filter = js_string_for_html_attr(sha1);
         details_html.push_str(&format!(
-            r#"<div class="detail-item-hash"><span class="detail-label">SHA1:</span> <a href="https://www.virustotal.com/gui/search/{}" target="_blank" class="detail-value hash-link" title="Search on VirusTotal">{}</a><button class="filter-btn-inline" onclick="filterValue('{}', event)" title="Filter out this hash">✖</button></div>"#,
-            html_escape(sha1), html_escape(sha1), html_escape(sha1)
+            r#"<div class="detail-item-hash"><span class="detail-label">SHA1:</span> <a href="https://www.virustotal.com/gui/search/{}" target="_blank" class="detail-value hash-link" title="Search on VirusTotal">{}</a><button class="filter-btn-inline" onclick="filterValue({}, event)" title="Filter out this hash">✖</button></div>"#,
+            html_escape(sha1), html_escape(sha1), sha1_filter
         ));
     }
     
     if let Some(ref sha256) = finding.sha256 {
+        let sha256_filter = js_string_for_html_attr(sha256);
         details_html.push_str(&format!(
-            r#"<div class="detail-item-hash"><span class="detail-label">SHA256:</span> <a href="https://www.virustotal.com/gui/search/{}" target="_blank" class="detail-value hash-link" title="Search on VirusTotal">{}</a><button class="filter-btn-inline" onclick="filterValue('{}', event)" title="Filter out this hash">✖</button></div>"#,
-            html_escape(sha256), html_escape(sha256), html_escape(sha256)
+            r#"<div class="detail-item-hash"><span class="detail-label">SHA256:</span> <a href="https://www.virustotal.com/gui/search/{}" target="_blank" class="detail-value hash-link" title="Search on VirusTotal">{}</a><button class="filter-btn-inline" onclick="filterValue({}, event)" title="Filter out this hash">✖</button></div>"#,
+            html_escape(sha256), html_escape(sha256), sha256_filter
         ));
     }
     
@@ -1868,8 +1871,8 @@ fn render_finding_card(finding: &LogEvent, idx: usize) -> String {
             };
             
             let filter_btn = if let Some(ref rn) = rule_name {
-                let escaped_rule = rn.replace('\'', "\\'");
-                format!(r#"<button class="filter-btn-inline" onclick="filterValue('{}', event)" title="Filter out this rule">✖</button>"#, escaped_rule)
+                let escaped_rule = js_string_for_html_attr(rn);
+                format!(r#"<button class="filter-btn-inline" onclick="filterValue({}, event)" title="Filter out this rule">✖</button>"#, escaped_rule)
             } else {
                 String::new()
             };
@@ -1964,15 +1967,14 @@ fn render_finding_card(finding: &LogEvent, idx: usize) -> String {
     let raw_json = serde_json::to_string_pretty(finding).unwrap_or_default();
     let highlighted_json = syntax_highlight_json(&raw_json);
     
-    // Create a JavaScript-safe version of the path for the onclick handler
-    let path_js_escaped = path_or_name.replace('\\', "\\\\").replace('\'', "\\'").replace('\n', "\\n");
+    let path_js_escaped = js_string_for_html_attr(path_or_name);
     
     format!(
         r#"<div class="finding-card" data-level="{level_class}" id="finding-{idx}">
             <div class="finding-header">
                 <span class="severity-badge {level_class}">{level}</span>
                 <span class="score">{score}</span>
-                <span class="finding-path">{path}<button class="filter-btn-inline" onclick="filterValue('{path_js}', event)" title="Filter out this path">✖</button></span>
+                <span class="finding-path">{path}<button class="filter-btn-inline" onclick="filterValue({path_js}, event)" title="Filter out this path">✖</button></span>
                 <span class="finding-type">{finding_type}</span>
             </div>
             <div class="finding-body">
@@ -2010,6 +2012,11 @@ fn html_escape(s: &str) -> String {
         .replace('>', "&gt;")
         .replace('"', "&quot;")
         .replace('\'', "&#39;")
+}
+
+fn js_string_for_html_attr(s: &str) -> String {
+    let json_string = serde_json::to_string(s).unwrap_or_else(|_| "\"\"".to_string());
+    html_escape(&json_string)
 }
 
 fn format_size(bytes: usize) -> String {
@@ -2244,5 +2251,49 @@ mod tests {
         assert!(result.contains("&lt;script"));
         assert!(!result.contains("<script language"));
     }
-}
 
+    #[test]
+    fn test_filter_values_are_safe_in_onclick_attributes() {
+        let finding = LogEvent {
+            timestamp: Utc::now(),
+            level: "alert".to_string(),
+            event_type: "file_match".to_string(),
+            hostname: "host".to_string(),
+            message: "match".to_string(),
+            context: BTreeMap::new(),
+            file_path: Some("C:\\tmp\\bad');alert(1);//\n</script>.exe".to_string()),
+            pid: None,
+            process_name: None,
+            score: Some(90.0),
+            file_type: Some("Executable".to_string()),
+            file_size: None,
+            md5: Some("abc');alert(1);//".to_string()),
+            sha1: None,
+            sha256: None,
+            file_created: None,
+            file_modified: None,
+            file_accessed: None,
+            reasons: Some(vec![MatchReason {
+                message: "YARA match with rule rule');alert(1);//".to_string(),
+                score: 80,
+                description: None,
+                author: None,
+                reference: None,
+                matched_strings: None,
+            }]),
+            start_time: None,
+            run_time: None,
+            memory_bytes: None,
+            cpu_usage: None,
+            connection_count: None,
+            listening_ports: None,
+        };
+
+        let html = render_finding_card(&finding, 1);
+
+        assert!(!html.contains("filterValue('"));
+        assert!(!html.contains("');alert(1);//"));
+        assert!(html.contains("\\n&lt;/script&gt;.exe"));
+        assert!(html.contains("filterValue(&quot;"));
+    }
+}

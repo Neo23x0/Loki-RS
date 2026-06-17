@@ -19,8 +19,33 @@ register_cleanup
 PROJECT_ROOT=$(get_project_root)
 cd "$PROJECT_ROOT"
 
-# Config file location
-CONFIG_FILE="$PROJECT_ROOT/build/config/excludes.cfg"
+# Config file location used by Loki at runtime
+CONFIG_FILE="$PROJECT_ROOT/config/excludes.cfg"
+mkdir -p "$(dirname "$CONFIG_FILE")"
+
+CONFIG_EXISTED=false
+CONFIG_RESTORED=false
+
+restore_excludes_config() {
+    if [ "$CONFIG_RESTORED" = true ]; then
+        return
+    fi
+
+    if [ -f "${CONFIG_FILE}.test_backup" ]; then
+        mv "${CONFIG_FILE}.test_backup" "$CONFIG_FILE"
+    elif [ "$CONFIG_EXISTED" = false ]; then
+        rm -f "$CONFIG_FILE"
+    fi
+
+    CONFIG_RESTORED=true
+}
+
+# Restore config on exit (covers both backup-restore and temp-config removal)
+# Replaces the default cleanup trap from register_cleanup
+trap '{
+    restore_excludes_config
+    teardown_temp_dir
+}' EXIT
 
 section "Setup Test Environment"
 
@@ -31,8 +56,8 @@ echo "test" > "$TEST_DIR/test.txt"
 
 # Backup original config
 if [ -f "$CONFIG_FILE" ]; then
+    CONFIG_EXISTED=true
     backup_file "$CONFIG_FILE"
-    ORIGINAL_CONFIG=$(cat "$CONFIG_FILE")
 fi
 
 section "Test 1: Empty exclusion config (0 exclusions)"
@@ -59,7 +84,7 @@ if echo "$TEST_OUTPUT" | grep -qiE "exclusion.*:.*0|0.*exclusion"; then
     echo "$TEST_OUTPUT" | grep -iE "exclusion" | head -3 | sed 's/^/    /'
 else
     echo "  Searching for exclusion info in output:"
-    echo "$TEST_OUTPUT" | grep -iE "(exclusion|config)" | head -5 | sed 's/^/    /'
+    echo "$TEST_OUTPUT" | grep -iE "(exclusion|config)" | head -5 | sed 's/^/    /' || true
 fi
 
 section "Test 2: Config with 3 exclusion patterns"
@@ -91,7 +116,7 @@ elif echo "$TEST_OUTPUT" | grep -qiE "exclusion.*:.*[1-9]|[1-9].*exclusion"; the
     echo "$TEST_OUTPUT" | grep -iE "exclusion" | head -3 | sed 's/^/    /'
 else
     echo "  Searching for exclusion info in output:"
-    echo "$TEST_OUTPUT" | grep -iE "(exclusion|config|pattern)" | head -5 | sed 's/^/    /'
+    echo "$TEST_OUTPUT" | grep -iE "(exclusion|config|pattern)" | head -5 | sed 's/^/    /' || true
 fi
 
 section "Test 3: Verify exclusion count is reported in scan info"
@@ -100,20 +125,15 @@ section "Test 3: Verify exclusion count is reported in scan info"
 if echo "$TEST_OUTPUT" | grep -qiE "(Configuration|Scan limits|Settings)"; then
     echo -e "${GREEN}✓ Configuration/settings section found${NC}"
     echo "  Relevant output:"
-    echo "$TEST_OUTPUT" | grep -iE "(configuration|limits|exclusion|setting)" | head -10 | sed 's/^/    /'
+    echo "$TEST_OUTPUT" | grep -iE "(configuration|limits|exclusion|setting)" | head -10 | sed 's/^/    /' || true
 else
     echo "  Output does not explicitly show configuration section"
 fi
 
 section "Cleanup: Restore original config"
 
-# Restore original config
-if [ -n "${ORIGINAL_CONFIG:-}" ]; then
-    echo "$ORIGINAL_CONFIG" > "$CONFIG_FILE"
-    echo "Restored original config"
-else
-    restore_file "$CONFIG_FILE"
-fi
+restore_excludes_config
+echo "Restored original config"
 
 section "Test Results"
 
@@ -125,4 +145,3 @@ else
     echo "=== Exclusion Count Test: FAIL ==="
     exit 1
 fi
-
