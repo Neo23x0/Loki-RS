@@ -1,0 +1,42 @@
+ rule test_1
+ └─ condition
+    └─ eq
+       ├─ field access
+       │  ├─ <expr>[<index>]
+       │  │  ├─ <expr>
+       │  │  │  └─ field access
+       │  │  │     ├─ foo
+       │  │  │     └─ bar
+       │  │  └─ <index>
+       │  │     └─ 0
+       │  └─ baz
+       └─ baz()
+          └─ <object>
+             └─ field access
+                ├─ foo
+                └─ bar
+
+ rule test_2
+ └─ condition
+    └─ field access
+       ├─ bar(<arg0>, <arg1>)
+       │  ├─ <object>
+       │  │  └─ foo
+       │  ├─ <arg0>
+       │  │  └─ 1
+       │  └─ <arg1>
+       │     └─ 2
+       └─ baz
+
+ rule test_3
+ └─ condition
+    └─ foo(<arg0>, <arg1>, <arg2>, <arg3>)
+       ├─ <arg0>
+       │  └─ "a"
+       ├─ <arg1>
+       │  └─ "b"
+       ├─ <arg2>
+       │  └─ 2.0
+       └─ <arg3>
+          └─ true
+

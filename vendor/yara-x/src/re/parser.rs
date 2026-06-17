@@ -237,7 +237,8 @@ impl Parser {
                             // position where the `{` is, but in some other
                             // cases it starts a few characters after the `{`.
                             let re_src_ref: &str = re_src.as_ref();
-                            let curly_brace = re_src_ref[0..=span.start.offset]
+                            let curly_brace = re_src_ref
+                                [0..=span.start.offset]
                                 .rfind('{')
                                 .unwrap();
                             let mut s = re_src.into_owned();

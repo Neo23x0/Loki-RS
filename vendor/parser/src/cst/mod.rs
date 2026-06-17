@@ -1,0 +1,1389 @@
+/*! Concrete Syntax Tree (CST) for YARA rules.
+
+A Concrete Syntax Tree (CST), also known as a lossless syntax tree, is a
+detailed representation of the source code that retains all aspects, including
+punctuation, spacing, and comments. This makes the CST ideal for traversing
+the source code exactly as it appears in its original form.
+
+CSTs are typically used in code formatters, documentation generators, source
+code analysis tools, and similar applications. However, a key limitation is
+that the CST does not account for operator associativity or precedence rules.
+Expressions are represented in the CST exactly as they appear in the source
+code, without any grouping based on operator precedence.
+ */
+
+use std::fmt::{Debug, Display, Formatter};
+use std::iter;
+use std::iter::Cloned;
+use std::marker::PhantomData;
+use std::slice::Iter;
+use std::str::{Utf8Error, from_utf8};
+
+pub use syntax_kind::SyntaxKind;
+
+use crate::cst::SyntaxKind::{COMMENT, NEWLINE, WHITESPACE};
+use crate::cst::error_merger::ErrorMerger;
+use crate::{Parser, Span};
+
+pub(crate) mod error_merger;
+pub(crate) mod syntax_kind;
+pub(crate) mod syntax_stream;
+#[cfg(test)]
+mod tests;
+
+/// Each of the events in a [`CSTStream`].
+///
+/// See the documentation of [`CSTStream`] for more details.
+#[derive(Debug, PartialEq)]
+pub enum Event {
+    /// Indicates the beginning of a non-terminal production in the grammar.
+    Begin { kind: SyntaxKind, span: Span },
+    /// Indicates the end of a non-terminal production in the grammar.
+    End { kind: SyntaxKind, span: Span },
+    /// A terminal symbol in the grammar.
+    Token { kind: SyntaxKind, span: Span },
+    /// An error found during the parsing of the source.
+    Error { message: String, span: Span },
+}
+
+/// A CST represented as a stream of events.
+///
+/// Each event in the stream has one of the following types:
+///
+/// - [`Event::Token`]
+/// - [`Event::Begin`]
+/// - [`Event::End`]
+/// - [`Event::Error`]
+///
+/// [`Event::Token`] represents terminal symbols in the grammar, such as
+/// keywords, punctuation, identifiers, comments and even whitespace. Each
+/// [`Event::Token`] has an associated [`Span`] that indicates its position
+/// in the source code.
+///
+/// [`Event::Begin`] and [`Event::End`] relate to non-terminal symbols, such as
+/// expressions and statements. These events appear in pairs, with each `Begin`
+/// followed by a corresponding `End` of the same kind. A `Begin`/`End` pair
+/// represents a non-terminal node in the syntax tree, with everything in
+/// between being a child of this node.
+///
+/// [`Event::Error`] events are not technically part of the syntax tree. They
+/// contain error messages generated during parsing. Although these errors could
+/// be in a separate stream, they are integrated into the syntax tree for
+/// simplicity. Each error message is placed under the tree node that was being
+/// parsed when the error occurred.
+///
+/// Notice that [`Event::Error`] and `Event::Begin(ERROR)` are not the same,
+/// and both of them can appear in the stream. The former is an error message
+/// issued by the parser, while the latter indicates the start of a CST
+/// subtree that contains portions of the syntax tree that were not correctly
+/// parsed. Of course, `Event::Begin(ERROR)` must be accompanied by a matching
+/// `Event::End(ERROR)`.
+pub struct CSTStream<'src, I>
+where
+    I: Iterator<Item = Event>,
+{
+    source: &'src [u8],
+    events: ErrorMerger<I>,
+    whitespaces: bool,
+    newlines: bool,
+    comments: bool,
+}
+
+impl<'src, I> CSTStream<'src, I>
+where
+    I: Iterator<Item = Event>,
+{
+    /// Creates a new [`CSTStream`] from source code and some iterator
+    /// that returns the parsed source code in the form of a sequence
+    /// of [`Event`].
+    ///
+    /// This API is not meant to be public, but it is used by the
+    /// compiler in the yara_x crate.
+    #[doc(hidden)]
+    pub fn new(source: &'src [u8], events: I) -> Self {
+        Self {
+            source,
+            events: ErrorMerger::new(events),
+            whitespaces: true,
+            newlines: true,
+            comments: true,
+        }
+    }
+
+    pub fn source(&self) -> &'src [u8] {
+        self.source
+    }
+
+    /// Enables or disables whitespaces in the returned CST.
+    ///
+    /// If false, the resulting CST won't contain whitespaces.
+    ///
+    /// Default value is `true`.
+    pub fn whitespaces(mut self, yes: bool) -> Self {
+        self.whitespaces = yes;
+        self
+    }
+
+    /// Enables or disables newlines in the returned CST.
+    ///
+    /// If false, the resulting CST won't contain newlines.
+    ///
+    /// Default value is `true`.
+    pub fn newlines(mut self, yes: bool) -> Self {
+        self.newlines = yes;
+        self
+    }
+
+    /// Enables or disables comments in the returned CST.
+    ///
+    /// If false, the resulting CST won't contain comments.
+    ///
+    /// Default value is `true`.
+    pub fn comments(mut self, yes: bool) -> Self {
+        self.comments = yes;
+        self
+    }
+}
+
+impl<I> Iterator for CSTStream<'_, I>
+where
+    I: Iterator<Item = Event>,
+{
+    type Item = Event;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        loop {
+            match self.events.next()? {
+                token @ Event::Token { kind: WHITESPACE, .. } => {
+                    if self.whitespaces {
+                        break Some(token);
+                    }
+                }
+                token @ Event::Token { kind: NEWLINE, .. } => {
+                    if self.newlines {
+                        break Some(token);
+                    }
+                }
+                token @ Event::Token { kind: COMMENT, .. } => {
+                    if self.comments {
+                        break Some(token);
+                    }
+                }
+                token => break Some(token),
+            }
+        }
+    }
+}
+
+struct CSTIter<'a> {
+    iter: rowan::api::PreorderWithTokens<YARA>,
+    errors: Cloned<Iter<'a, (Span, String)>>,
+}
+
+impl<'a> Iterator for CSTIter<'a> {
+    type Item = Event;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        for event in self.iter.by_ref() {
+            match event {
+                rowan::WalkEvent::Enter(e) => {
+                    return match e {
+                        rowan::SyntaxElement::Node(node) => {
+                            Some(Event::Begin {
+                                kind: node.kind(),
+                                span: Span::from(node.text_range()),
+                            })
+                        }
+                        rowan::SyntaxElement::Token(token) => {
+                            Some(Event::Token {
+                                kind: token.kind(),
+                                span: Span::from(token.text_range()),
+                            })
+                        }
+                    };
+                }
+                rowan::WalkEvent::Leave(e) => {
+                    if let rowan::SyntaxElement::Node(node) = e {
+                        return Some(Event::End {
+                            kind: node.kind(),
+                            span: Span::from(node.text_range()),
+                        });
+                    }
+                }
+            }
+        }
+        if let Some((span, message)) = self.errors.next() {
+            return Some(Event::Error { message, span });
+        }
+        None
+    }
+}
+
+impl<'src> From<Parser<'src>> for CSTStream<'src, Parser<'src>> {
+    /// Creates a [`CSTStream`] from the given parser.
+    fn from(parser: Parser<'src>) -> Self {
+        CSTStream::new(parser.source(), parser)
+    }
+}
+#[allow(clippy::upper_case_acronyms)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+struct YARA();
+
+impl rowan::Language for YARA {
+    type Kind = SyntaxKind;
+
+    /// Convert from [`rowan::SyntaxKind`] kind to [`SyntaxKind`].
+    fn kind_from_raw(raw: rowan::SyntaxKind) -> SyntaxKind {
+        unsafe { std::mem::transmute::<u16, SyntaxKind>(raw.0) }
+    }
+
+    /// Convert from [`SyntaxKind`] to [`rowan::SyntaxKind`].
+    fn kind_to_raw(kind: SyntaxKind) -> rowan::SyntaxKind {
+        kind.into()
+    }
+}
+
+/// A Concrete Syntax Tree (CST).
+///
+/// NOTE: This API is still unstable and should not be used by third-party code.
+#[doc(hidden)]
+pub struct CST {
+    root: rowan::GreenNode,
+    errors: Vec<(Span, String)>,
+}
+
+impl Debug for CST {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{:#?}", self.root())?;
+        if !self.errors.is_empty() {
+            writeln!(f, "\nERRORS:")?;
+            for (span, err) in &self.errors {
+                writeln!(f, "- {span}: {err}")?;
+            }
+        }
+        Ok(())
+    }
+}
+
+impl CST {
+    /// Returns the root node of the CST.
+    ///
+    /// The node is initially immutable, but it can be converted into a mutable
+    /// one by calling [`Node::into_mut`].
+    pub fn root(&self) -> Node<Immutable> {
+        Node::new(rowan::SyntaxNode::new_root(self.root.clone()))
+    }
+
+    /// Returns the parsed source code as an iterator of [`Event`].
+    pub fn iter(&self) -> impl Iterator<Item = Event> + '_ {
+        CSTIter {
+            iter: rowan::SyntaxNode::new_root(self.root.clone())
+                .preorder_with_tokens(),
+            errors: self.errors.iter().cloned(),
+        }
+    }
+}
+
+impl<'src> From<&'src str> for CST {
+    /// Crates a [`CST`] from the given source code.
+    fn from(src: &'src str) -> Self {
+        // The source is &str, therefore it is guaranteed to be valid UTF-8
+        // and calling .unwrap() is safe.
+        Self::try_from(Parser::new(src.as_bytes())).unwrap()
+    }
+}
+
+impl TryFrom<Parser<'_>> for CST {
+    type Error = Utf8Error;
+
+    /// Crates a [`CST`] from the given parser.
+    fn try_from(parser: Parser) -> Result<Self, Utf8Error> {
+        Self::try_from(CSTStream::new(parser.source(), parser))
+    }
+}
+
+impl<'src, I> TryFrom<CSTStream<'src, I>> for CST
+where
+    I: Iterator<Item = Event>,
+{
+    type Error = Utf8Error;
+
+    /// Creates a [`CST`] from the given [`CSTStream`].
+    fn try_from(cst: CSTStream<'src, I>) -> Result<Self, Utf8Error> {
+        let source = cst.source();
+        let mut builder = rowan::GreenNodeBuilder::new();
+        let mut prev_token_span: Option<Span> = None;
+        let mut errors = Vec::new();
+
+        for node in cst {
+            match node {
+                Event::Begin { kind, .. } => builder.start_node(kind.into()),
+                Event::End { .. } => builder.finish_node(),
+                Event::Token { kind, span } => {
+                    // Make sure that the CST covers the whole source code,
+                    // each must start where the previous one ended.
+                    if let Some(prev_token_span) = prev_token_span {
+                        assert_eq!(
+                            prev_token_span.end(),
+                            span.start(),
+                            "gap in the CST, one token ends at {} and the next one starts at {}",
+                            prev_token_span.end(),
+                            span.start(),
+                        );
+                    }
+                    // The span must be within the source code, this unwrap
+                    // can't fail.
+                    let token = source.get(span.range()).unwrap();
+                    let token = from_utf8(token)?;
+
+                    builder.token(kind.into(), token);
+                    prev_token_span = Some(span);
+                }
+                Event::Error { message, span } => errors.push((span, message)),
+            }
+        }
+
+        Ok(Self { root: builder.finish(), errors })
+    }
+}
+
+/// Sibling traversal direction.
+///
+/// NOTE: This API is still unstable and should not be used by third-party code.
+#[doc(hidden)]
+pub enum Direction {
+    Next,
+    Prev,
+}
+
+/// Represents the source code covered by a portion of the CST.
+///
+/// In a CST, each [`Token`] owns a text string containing the source
+/// code for that token. As a result, there isn't a single contiguous
+/// block of memory that contains all the source code, which means it
+/// cannot be represented as a single [`String`].
+///
+/// Instead, we use the [`Text`] type to represent a logically
+/// contiguous portion of the code, even though it is physically
+/// composed of non-contiguous chunks, each owned by a [`Token`].
+///
+/// NOTE: This API is still unstable and should not be used by third-party code.
+#[derive(PartialEq, Eq)]
+#[doc(hidden)]
+pub struct Text(rowan::SyntaxText);
+
+impl Text {
+    /// Returns the length of the text.
+    #[inline]
+    pub fn len(&self) -> usize {
+        self.0.len().into()
+    }
+
+    /// Returns true if the text is empty.
+    #[inline]
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    /// Folds every chunk in text into an accumulator by applying an operation
+    /// returning the final result.
+    #[inline]
+    pub fn try_fold_chunks<T, F, E>(&self, init: T, f: F) -> Result<T, E>
+    where
+        F: FnMut(T, &str) -> Result<T, E>,
+    {
+        self.0.try_fold_chunks(init, f)
+    }
+
+    /// Applies a fallible function `f` to each chunk in the text, stopping at
+    /// the first error and returning that error.
+    pub fn try_for_each_chunks<F, E>(&self, f: F) -> Result<(), E>
+    where
+        F: FnMut(&str) -> Result<(), E>,
+    {
+        self.0.try_for_each_chunk(f)
+    }
+
+    /// Applies a function `f` to each chunk in the text.
+    pub fn for_each_chunks<F>(&self, f: F)
+    where
+        F: FnMut(&str),
+    {
+        self.0.for_each_chunk(f)
+    }
+}
+
+impl Display for Text {
+    #[inline]
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Display::fmt(&self.0, f)
+    }
+}
+
+impl Debug for Text {
+    #[inline]
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Debug::fmt(&self.0, f)
+    }
+}
+
+impl PartialEq<Text> for str {
+    fn eq(&self, other: &Text) -> bool {
+        other.0 == self
+    }
+}
+
+impl PartialEq<Text> for &str {
+    fn eq(&self, other: &Text) -> bool {
+        other == self
+    }
+}
+
+impl PartialEq<&'_ str> for Text {
+    fn eq(&self, other: &&str) -> bool {
+        self.0 == *other
+    }
+}
+
+/// Represents the encoding used to interpret column numbers.
+#[doc(hidden)]
+pub trait Encoding {
+    fn len(s: &str) -> usize;
+}
+
+/// Represents the UTF-8 encoding.
+#[derive(Debug, PartialEq)]
+#[doc(hidden)]
+pub struct Utf8 {}
+
+/// Represents the UTF-16 encoding.
+#[derive(Debug, PartialEq)]
+#[doc(hidden)]
+pub struct Utf16 {}
+
+/// Represents the UTF-32 encoding.
+#[derive(Debug, PartialEq)]
+#[doc(hidden)]
+pub struct Utf32 {}
+
+impl Encoding for Utf8 {
+    fn len(s: &str) -> usize {
+        s.len()
+    }
+}
+
+impl Encoding for Utf16 {
+    fn len(s: &str) -> usize {
+        s.encode_utf16().count()
+    }
+}
+
+impl Encoding for Utf32 {
+    fn len(s: &str) -> usize {
+        s.chars().count()
+    }
+}
+
+/// Represents a position in the source code expressed as a line and column
+/// number.
+///
+/// Line and column numbers are zero-based. The meaning of the column number
+/// depends on the encoding:
+///
+/// * [`Utf8`]: the column number is expressed as UTF-8 code units (bytes).
+///   In this mode the column number is the byte offset of the character
+///   counted from the start of the line.
+/// * [`Utf16`]: the column number is expressed as UTF-16 code units.
+///   In this mode the column number is the number of UTF-16 code units from
+///   the start of the line. In UTF-16 each character is composed of 1 or 2
+///   code units.
+/// * [`Utf32`]: the column number is expressed as UTF-32 code units. In
+///   UTF-32 all characters are expressed as a single code unit, therefore
+///   in this mode the column number corresponds to the number of characters
+///   from the start of the line.
+///
+/// In [`Utf32`] mode, the column is synonymous with the "character count",
+/// while in [`Utf8`] and [`Utf16`], the column number reflects the underlying
+/// memory usage, not necessarily the number of visible characters.
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[doc(hidden)]
+pub struct Position<E: Encoding> {
+    pub line: usize,
+    pub column: usize,
+    _encoding: PhantomData<E>,
+}
+
+impl<E: Encoding> From<(usize, usize)> for Position<E> {
+    #[inline]
+    fn from((line, column): (usize, usize)) -> Self {
+        Self { line, column, _encoding: PhantomData }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[doc(hidden)]
+pub struct Mutable;
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[doc(hidden)]
+pub struct Immutable;
+
+/// A token in the CST.
+///
+/// Tokens are the leaves of the tree, which correspond to terminal symbols in
+/// the grammar, such as keywords, identifiers, whitespaces, punctuation, etc.
+///
+/// The inner (non-leave) nodes in the CST are of type [`Node`].
+///
+/// NOTE: This API is still unstable and should not be used by third-party code.
+#[derive(Clone, PartialEq, Eq)]
+#[doc(hidden)]
+pub struct Token<M> {
+    inner: rowan::SyntaxToken<YARA>,
+    _state: PhantomData<M>,
+}
+
+impl<M> Token<M> {
+    fn new(inner: rowan::SyntaxToken<YARA>) -> Self {
+        Self { inner, _state: PhantomData }
+    }
+}
+#[allow(clippy::len_without_is_empty)]
+impl<M: Clone> Token<M> {
+    #[inline]
+    /// Returns the kind of this token.
+    pub fn kind(&self) -> SyntaxKind {
+        self.inner.kind()
+    }
+
+    #[inline]
+    /// Returns the token as a string.
+    pub fn text(&self) -> &str {
+        self.inner.text()
+    }
+
+    /// Returns the span of the token.
+    #[inline]
+    pub fn span(&self) -> Span {
+        Span(self.inner.text_range().into())
+    }
+
+    /// Returns the length of the token.
+    ///
+    /// The length of the token depends on the encoding in the following
+    /// way:
+    ///
+    /// * [`Utf8`]: the length is expressed as the number of code units in the
+    ///   UTF-8 representation of the token. Each code unit is 1 byte long, and
+    ///   each character is represented by a 1, 2, 3 or 4 code units.
+    /// * [`Utf16`]: the length is expressed as the number of code units in the
+    ///   UTF-16 representation of the token. Each code unit is 2 bytes long,
+    ///   and each character is represented by 1 or 2 code units.
+    /// * [`Utf32`]: the length is expressed as the number of code units in the
+    ///   UTF-32 representation of the token. Each code unit is 4 bytes long,
+    ///   and each character is represented by exactly 1 code unit. This is
+    ///   equivalent to the character count of the token.
+    #[inline]
+    pub fn len<E: Encoding>(&self) -> usize {
+        E::len(self.text())
+    }
+
+    /// Returns the position (line and column) where this token starts.
+    pub fn start_pos<E: Encoding>(&self) -> Position<E> {
+        // Initially we assume that the token is in line 0, column 0.
+        let mut line = 0;
+        let mut column = 0;
+        // Iterate the tokens in the tree starting at the current token and
+        // going backwards looking for newlines. For every newline found, the
+        // line number is incremented. Comments can contain newlines too. When
+        // a comment is found, the line number is incremented by the number of
+        // newlines contained in the comment.
+        let mut prev_token = self.prev_token();
+        while let Some(token) = prev_token {
+            match token.kind() {
+                NEWLINE => line += 1,
+                COMMENT => {
+                    if line == 0 {
+                        let comment = token.text();
+                        let last_line = match comment.rfind('\n') {
+                            Some(idx) => &comment[idx + 1..],
+                            None => comment, // no newline → whole comment
+                        };
+                        column += E::len(last_line);
+                    }
+                    line += token.text().chars().filter(|c| *c == '\n').count()
+                }
+                _ => {
+                    if line == 0 {
+                        column += token.len::<E>()
+                    }
+                }
+            }
+            prev_token = token.prev_token();
+        }
+        Position::from((line, column))
+    }
+
+    /// Returns the position (line and column) where this token ends.
+    pub fn end_pos<E: Encoding>(&self) -> Position<E> {
+        let token = self.text();
+        let start = self.start_pos::<E>();
+
+        match token.rfind('\n') {
+            // The token contains newline characters. The ending line is the
+            // start line plus the number of newlines. The ending column is the
+            // length of the last line.
+            Some(last_newline) => Position::from((
+                start.line + token.chars().filter(|c| *c == '\n').count(),
+                E::len(&token[last_newline + 1..]),
+            )),
+            // The token doesn't contain newline characters. The end line
+            // and the start line are the same. The ending column is the
+            // start column plus the token's length.
+            None => {
+                Position::from((start.line, start.column + self.len::<E>()))
+            }
+        }
+    }
+
+    #[inline]
+    /// Returns the parent of this token.
+    pub fn parent(&self) -> Option<Node<M>> {
+        self.inner.parent().map(Node::new)
+    }
+
+    /// Returns the ancestors of this token.
+    ///
+    /// The first one is the token's parent, then token's grandparent,
+    /// and so on.
+    #[inline]
+    pub fn ancestors(&self) -> impl Iterator<Item = Node<M>> {
+        self.inner.parent_ancestors().map(Node::new)
+    }
+
+    /// Returns the token before the current one.
+    ///
+    /// The token before the current one is not necessary a sibling of the
+    /// current one. This function performs a depth-first traversal of the CST,
+    /// returning tokens right-to-left.
+    ///
+    /// ```rust
+    /// # use yara_x_parser::cst::SyntaxKind;
+    /// # use yara_x_parser::Parser;
+    /// let mut token = Parser::new(b"rule test {condition:true}")
+    ///     .try_into_cst()
+    ///     .unwrap()
+    ///     .root()
+    ///     .last_token()
+    ///     .unwrap();
+    ///
+    /// assert_eq!(token.kind(), SyntaxKind::R_BRACE);
+    /// token = token.prev_token().unwrap();
+    /// assert_eq!(token.kind(), SyntaxKind::TRUE_KW);
+    /// token = token.prev_token().unwrap();
+    /// assert_eq!(token.kind(), SyntaxKind::COLON);
+    /// token = token.prev_token().unwrap();
+    /// assert_eq!(token.kind(), SyntaxKind::CONDITION_KW);
+    /// token = token.prev_token().unwrap();
+    /// assert_eq!(token.kind(), SyntaxKind::L_BRACE);
+    /// token = token.prev_token().unwrap();
+    /// assert_eq!(token.kind(), SyntaxKind::WHITESPACE);
+    /// token = token.prev_token().unwrap();
+    /// assert_eq!(token.kind(), SyntaxKind::IDENT);
+    /// token = token.prev_token().unwrap();
+    /// assert_eq!(token.kind(), SyntaxKind::WHITESPACE);
+    /// token = token.prev_token().unwrap();
+    /// assert_eq!(token.kind(), SyntaxKind::RULE_KW);
+    /// assert_eq!(token.prev_token(), None);
+    /// ```
+    #[inline]
+    pub fn prev_token(&self) -> Option<Token<M>> {
+        self.inner.prev_token().map(Token::new)
+    }
+
+    /// Returns the token after the current one.
+    ///
+    /// The next token is not necessary a sibling of the current one. This
+    /// function performs a depth-first traversal of the CST, returning
+    /// tokens left-to-right.
+    ///
+    /// ```rust
+    /// # use yara_x_parser::cst::SyntaxKind;
+    /// # use yara_x_parser::Parser;
+    /// let mut token = Parser::new(b"rule test {condition:true}")
+    ///     .try_into_cst()
+    ///     .unwrap()
+    ///     .root()
+    ///     .first_token()
+    ///     .unwrap();
+    ///
+    /// assert_eq!(token.kind(), SyntaxKind::RULE_KW);
+    /// token = token.next_token().unwrap();
+    /// assert_eq!(token.kind(), SyntaxKind::WHITESPACE);
+    /// token = token.next_token().unwrap();
+    /// assert_eq!(token.kind(), SyntaxKind::IDENT);
+    /// token = token.next_token().unwrap();
+    /// assert_eq!(token.kind(), SyntaxKind::WHITESPACE);
+    /// token = token.next_token().unwrap();
+    /// assert_eq!(token.kind(), SyntaxKind::L_BRACE);
+    /// token = token.next_token().unwrap();
+    /// assert_eq!(token.kind(), SyntaxKind::CONDITION_KW);
+    /// token = token.next_token().unwrap();
+    /// assert_eq!(token.kind(), SyntaxKind::COLON);
+    /// token = token.next_token().unwrap();
+    /// assert_eq!(token.kind(), SyntaxKind::TRUE_KW);
+    /// token = token.next_token().unwrap();
+    /// assert_eq!(token.kind(), SyntaxKind::R_BRACE);
+    /// assert_eq!(token.next_token(), None);
+    /// ```
+    #[inline]
+    pub fn next_token(&self) -> Option<Token<M>> {
+        self.inner.next_token().map(Token::new)
+    }
+
+    /// Returns the previous sibling in the tree.
+    #[inline]
+    pub fn prev_sibling_or_token(&self) -> Option<NodeOrToken<M>> {
+        self.inner.prev_sibling_or_token().map(|x| x.into())
+    }
+
+    /// Returns the next sibling in the tree.
+    #[inline]
+    pub fn next_sibling_or_token(&self) -> Option<NodeOrToken<M>> {
+        self.inner.next_sibling_or_token().map(|x| x.into())
+    }
+}
+
+impl<M> Display for Token<M> {
+    #[inline]
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Display::fmt(&self.inner, f)
+    }
+}
+
+impl<M> Debug for Token<M> {
+    #[inline]
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Debug::fmt(&self.inner, f)
+    }
+}
+
+impl Token<Mutable> {
+    #[inline]
+    /// Detach the token from the CST it belongs to.
+    pub fn detach(&self) {
+        self.inner.detach()
+    }
+
+    pub fn replace(&mut self, text: &str) -> Node<Mutable> {
+        Node::new(rowan::SyntaxNode::new_root_mut(
+            self.inner.replace_with(rowan::GreenToken::new(
+                self.kind().into(),
+                text,
+            )),
+        ))
+    }
+}
+
+/// Either a  [`Node`] or a [`Token`].
+///
+/// In a CST, nodes are the inner nodes of the tree, leaves are tokens.
+///
+/// NOTE: This API is still unstable and should not be used by third-party code.
+#[doc(hidden)]
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub enum NodeOrToken<M> {
+    Node(Node<M>),
+    Token(Token<M>),
+}
+
+impl<M: Clone> NodeOrToken<M> {
+    /// Returns the kind of this node or token.
+    pub fn kind(&self) -> SyntaxKind {
+        match self {
+            NodeOrToken::Node(n) => n.kind(),
+            NodeOrToken::Token(t) => t.kind(),
+        }
+    }
+
+    /// Returns the parent of this node or token.
+    pub fn parent(&self) -> Option<Node<M>> {
+        match self {
+            NodeOrToken::Node(n) => n.parent(),
+            NodeOrToken::Token(t) => t.parent(),
+        }
+    }
+
+    /// If this is a node, returns it. Returns `None` if otherwise.
+    pub fn into_node(self) -> Option<Node<M>> {
+        match self {
+            NodeOrToken::Node(n) => Some(n),
+            NodeOrToken::Token(_) => None,
+        }
+    }
+
+    /// If this is a token, returns it. Returns `None` if otherwise.
+    pub fn into_token(self) -> Option<Token<M>> {
+        match self {
+            NodeOrToken::Node(_) => None,
+            NodeOrToken::Token(t) => Some(t),
+        }
+    }
+
+    /// Returns the ancestors of this node or token.
+    pub fn ancestors(&self) -> impl Iterator<Item = Node<M>> {
+        let first = match self {
+            NodeOrToken::Node(n) => n.parent(),
+            NodeOrToken::Token(t) => t.parent(),
+        };
+        iter::successors(first, Node::parent)
+    }
+
+    /// Returns the previous sibling of this node or token.
+    pub fn prev_sibling_or_token(&self) -> Option<NodeOrToken<M>> {
+        match self {
+            NodeOrToken::Node(n) => n.prev_sibling_or_token(),
+            NodeOrToken::Token(t) => t.prev_sibling_or_token(),
+        }
+    }
+
+    /// Returns the previous sibling of this node or token
+    pub fn next_sibling_or_token(&self) -> Option<NodeOrToken<M>> {
+        match self {
+            NodeOrToken::Node(n) => n.next_sibling_or_token(),
+            NodeOrToken::Token(t) => t.next_sibling_or_token(),
+        }
+    }
+
+    /// If this is a node, returns its first child, if any. If this is
+    /// a token, returns `None` because a toke never has children.
+    pub fn first_child_or_token(&self) -> Option<NodeOrToken<M>> {
+        match self {
+            NodeOrToken::Node(n) => n.first_child_or_token(),
+            NodeOrToken::Token(_) => None,
+        }
+    }
+
+    /// Returns the span of this node or token.
+    pub fn span(&self) -> Span {
+        match self {
+            NodeOrToken::Node(n) => n.span(),
+            NodeOrToken::Token(t) => t.span(),
+        }
+    }
+
+    /// Returns the position (line and column) where this node or token starts.
+    pub fn start_pos<E: Encoding>(&self) -> Position<E> {
+        match self {
+            NodeOrToken::Node(n) => n.start_pos(),
+            NodeOrToken::Token(t) => t.start_pos(),
+        }
+    }
+
+    /// Returns the position (line and column) where this node or token ends.
+    pub fn end_pos<E: Encoding>(&self) -> Position<E> {
+        match self {
+            NodeOrToken::Node(n) => n.end_pos(),
+            NodeOrToken::Token(t) => t.end_pos(),
+        }
+    }
+}
+
+impl NodeOrToken<Mutable> {
+    /// Detach the node or token from the CST it belongs to.
+    pub fn detach(&self) {
+        match self {
+            NodeOrToken::Node(n) => n.detach(),
+            NodeOrToken::Token(t) => t.detach(),
+        }
+    }
+}
+
+#[doc(hidden)]
+impl<M> From<rowan::SyntaxElement<YARA>> for NodeOrToken<M> {
+    fn from(value: rowan::SyntaxElement<YARA>) -> Self {
+        match value {
+            rowan::SyntaxElement::Node(node) => Self::Node(Node::new(node)),
+            rowan::SyntaxElement::Token(token) => {
+                Self::Token(Token::new(token))
+            }
+        }
+    }
+}
+
+#[doc(hidden)]
+impl<M> From<NodeOrToken<M>> for rowan::SyntaxElement<YARA> {
+    fn from(value: NodeOrToken<M>) -> Self {
+        match value {
+            NodeOrToken::Node(n) => rowan::SyntaxElement::Node(n.inner),
+            NodeOrToken::Token(t) => rowan::SyntaxElement::Token(t.inner),
+        }
+    }
+}
+
+/// A node in the CST.
+///
+/// Nodes are the inner (non-leave) nodes of the tree, which correspond to
+/// non-terminal symbols in the grammar.
+///
+/// The leaves in a CST are of type [`Token`].
+///
+/// NOTE: This API is still unstable and should not be used by third-party code.
+#[doc(hidden)]
+#[derive(Clone, PartialEq, Eq)]
+pub struct Node<M> {
+    inner: rowan::SyntaxNode<YARA>,
+    _mutability: PhantomData<M>,
+}
+
+impl<M> Debug for Node<M> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{:#?}", self.inner)
+    }
+}
+
+impl<M> Node<M> {
+    fn new(inner: rowan::SyntaxNode<YARA>) -> Self {
+        Self { inner, _mutability: PhantomData }
+    }
+}
+
+impl<M: Clone> Node<M> {
+    /// Returns the kind of this node.
+    #[inline]
+    pub fn kind(&self) -> SyntaxKind {
+        self.inner.kind()
+    }
+
+    /// Returns the text of this node.
+    #[inline]
+    pub fn text(&self) -> Text {
+        Text(self.inner.text())
+    }
+
+    /// Returns the span of this node.
+    #[inline]
+    pub fn span(&self) -> Span {
+        Span(self.inner.text_range().into())
+    }
+
+    /// Returns the position (line and column) where this node starts.
+    #[inline]
+    pub fn start_pos<E: Encoding>(&self) -> Position<E> {
+        self.first_token().unwrap().start_pos()
+    }
+
+    /// Returns the position (line and column) where this node ends.
+    #[inline]
+    pub fn end_pos<E: Encoding>(&self) -> Position<E> {
+        self.last_token().unwrap().end_pos()
+    }
+
+    /// Returns the parent of this node.
+    ///
+    /// The result is [`None`] if this is the root node.
+    #[inline]
+    pub fn parent(&self) -> Option<Node<M>> {
+        self.inner.parent().map(Node::new)
+    }
+
+    /// Returns the ancestors of this node.
+    ///
+    /// The first one is this node's parent, then node's grandparent,
+    /// and so on.
+    #[inline]
+    pub fn ancestors(&self) -> impl Iterator<Item = Node<M>> {
+        iter::successors(self.parent(), Node::parent)
+    }
+
+    /// Returns the children of this node.
+    pub fn children(&self) -> Nodes<M> {
+        Nodes { inner: self.inner.children(), _mutability: PhantomData }
+    }
+
+    /// Returns the root node of the tree.
+    #[inline]
+    pub fn root(&self) -> Node<M> {
+        self.ancestors().last().unwrap_or_else(|| self.clone())
+    }
+
+    /// Returns the children of this node, including tokens.
+    pub fn children_with_tokens(&self) -> NodesAndTokens<M> {
+        NodesAndTokens {
+            inner: self.inner.children_with_tokens(),
+            _mutability: PhantomData,
+        }
+    }
+
+    /// Returns the first child of this node.
+    #[inline]
+    pub fn first_child(&self) -> Option<Node<M>> {
+        self.inner.first_child().map(Node::new)
+    }
+
+    /// Returns the last child of this node.
+    #[inline]
+    pub fn last_child(&self) -> Option<Node<M>> {
+        self.inner.last_child().map(Node::new)
+    }
+
+    /// Returns the first token of this node.
+    ///
+    /// The token returned is not necessarily a children of this node, this
+    /// function will perform depth-first traversal of the tree and will
+    /// return the left-most token that is a descendant of this node.
+    #[inline]
+    pub fn first_token(&self) -> Option<Token<M>> {
+        self.inner.first_token().map(Token::new)
+    }
+
+    /// Returns the last token of this node.
+    ///
+    /// The token returned is not necessarily a children of this node, this
+    /// function will perform depth-first traversal of the tree and will
+    /// return the right-most token that is a descendant of this node.
+    #[inline]
+    pub fn last_token(&self) -> Option<Token<M>> {
+        self.inner.last_token().map(Token::new)
+    }
+
+    /// Returns the first child or token of this node.
+    #[inline]
+    pub fn first_child_or_token(&self) -> Option<NodeOrToken<M>> {
+        self.inner.first_child_or_token().map(|x| x.into())
+    }
+
+    /// Returns the last child or token of this node.
+    #[inline]
+    pub fn last_child_or_token(&self) -> Option<NodeOrToken<M>> {
+        self.inner.last_child_or_token().map(|x| x.into())
+    }
+
+    /// Returns the next sibling of this node.
+    #[inline]
+    pub fn next_sibling(&self) -> Option<Node<M>> {
+        self.inner.next_sibling().map(Node::new)
+    }
+
+    /// Returns the previous sibling of this node.
+    #[inline]
+    pub fn prev_sibling(&self) -> Option<Node<M>> {
+        self.inner.prev_sibling().map(Node::new)
+    }
+
+    /// Returns the next sibling or token of this node.
+    #[inline]
+    pub fn next_sibling_or_token(&self) -> Option<NodeOrToken<M>> {
+        self.inner.next_sibling_or_token().map(|x| x.into())
+    }
+
+    /// Returns the previous sibling or token of this node.
+    #[inline]
+    pub fn prev_sibling_or_token(&self) -> Option<NodeOrToken<M>> {
+        self.inner.prev_sibling_or_token().map(|x| x.into())
+    }
+
+    /// Returns an iterator over the siblings of this node.
+    ///
+    /// ```rust
+    /// # use yara_x_parser::cst::{Direction, SyntaxKind};
+    /// # use yara_x_parser::Parser;
+    /// // Get the first child of the root node, which corresponds to the
+    /// // rule declaration for `test_1`.
+    /// let mut rule_decl = Parser::new(b"
+    /// rule test_1 {condition:true}
+    /// rule test_2 {condition:true}
+    /// ")
+    ///     .try_into_cst()
+    ///     .unwrap()
+    ///     .root()
+    ///     .first_child()
+    ///     .unwrap();
+    ///
+    /// // The rule `test_1` doesn't have any previous sibling.
+    /// let mut sibilings = rule_decl.siblings(Direction::Prev);
+    /// assert_eq!(sibilings.next(), None);    ///
+    ///
+    /// // The rule only sibling after `test_1` is the rule declaration
+    /// // for `test_2`.
+    /// let mut sibilings = rule_decl.siblings(Direction::Next);
+    /// assert_eq!(sibilings.next().map(|node| node.kind()), Some(SyntaxKind::RULE_DECL));
+    /// assert_eq!(sibilings.next().map(|node| node.kind()), None);
+    /// ```
+    pub fn siblings(
+        &self,
+        direction: Direction,
+    ) -> impl Iterator<Item = Node<M>> {
+        let direction = match direction {
+            Direction::Next => rowan::Direction::Next,
+            Direction::Prev => rowan::Direction::Prev,
+        };
+        // `inner.siblings()` always returns the current node as the first
+        // sibling. To me, this is not really helpful, and causes confusion
+        // to the API users, so we skip the current node and return only the
+        // real siblings.
+        self.inner.siblings(direction).skip(1).map(Node::new)
+    }
+
+    /// Returns an iterator over the siblings of this node, including tokens.
+    ///
+    /// Depending on the direction it will return the previous siblings or the
+    /// next siblings.
+    ///
+    /// ```rust
+    /// # use yara_x_parser::cst::{Direction, SyntaxKind};
+    /// # use yara_x_parser::Parser;
+    /// // Get the first child of the root node, which corresponds to the
+    /// // rule declaration for `test_1`.
+    /// let mut rule_decl = Parser::new(b"
+    /// rule test_1 {condition:true}
+    /// rule test_2 {condition:true}
+    /// ")
+    ///     .try_into_cst()
+    ///     .unwrap()
+    ///     .root()
+    ///     .first_child()
+    ///     .unwrap();
+    ///
+    /// // The rule `test_1` doesn't have any sibling node before it, but
+    /// // there's a newline token before it.
+    /// let mut sibilings = rule_decl.siblings_with_tokens(Direction::Prev);
+    /// assert_eq!(sibilings.next().map(|node| node.kind()), Some(SyntaxKind::NEWLINE));
+    /// assert_eq!(sibilings.next(), None);
+    ///
+    /// // After the rule `test_1` there's a newline token, followed by the rule
+    /// // declaration node for `test_2`, and then another newline.
+    /// let mut sibilings = rule_decl.siblings_with_tokens(Direction::Next);
+    /// assert_eq!(sibilings.next().map(|node| node.kind()), Some(SyntaxKind::NEWLINE));
+    /// assert_eq!(sibilings.next().map(|node| node.kind()), Some(SyntaxKind::RULE_DECL));
+    /// assert_eq!(sibilings.next().map(|node| node.kind()), Some(SyntaxKind::NEWLINE));
+    /// assert_eq!(sibilings.next().map(|node| node.kind()), None);
+    /// ```
+    pub fn siblings_with_tokens(
+        &self,
+        direction: Direction,
+    ) -> impl Iterator<Item = NodeOrToken<M>> {
+        let direction = match direction {
+            Direction::Next => rowan::Direction::Next,
+            Direction::Prev => rowan::Direction::Prev,
+        };
+        // `inner.siblings()` always returns the current node as the first
+        // sibling. To me, this is not really helpful, and causes confusion
+        // to the API users, so we skip the current node and return only the
+        // real siblings.
+        self.inner.siblings_with_tokens(direction).skip(1).map(|x| x.into())
+    }
+
+    /// Returns the token at a given offset within the source code.
+    ///
+    /// If the offset points to code that is outside the current node, this
+    /// function returns `None`.
+    ///
+    /// ```rust
+    /// # use yara_x_parser::cst::SyntaxKind;
+    /// use yara_x_parser::Parser;
+    /// let mut root_node = Parser::new(b"rule test {condition:true}")
+    ///     .try_into_cst()
+    ///     .unwrap()
+    ///     .root();
+    ///
+    /// let rule_decl = root_node.first_child().unwrap();
+    ///
+    /// // Should find `SyntaxKind::RULE_KW` token at offset 0.
+    /// assert_eq!(
+    ///     rule_decl.token_at_offset(0).unwrap().kind(),
+    ///     SyntaxKind::RULE_KW);
+    ///
+    /// // Should find `SyntaxKind::WHITESPACE` token at offset 4.
+    /// assert_eq!(
+    ///     rule_decl.token_at_offset(4).unwrap().kind(),
+    ///     SyntaxKind::WHITESPACE);
+    ///
+    /// let condition_blk = rule_decl.first_child().unwrap();
+    ///
+    /// // When calling `token_at_offset(0)` on the node that represents
+    /// // the condition block the result is `None` because the `rule`
+    /// // keyword is not contained in that node.
+    /// assert!(condition_blk.token_at_offset(0).is_none());
+    ///
+    /// // Should return `None` for an empty file.
+    /// let mut empty = Parser::new(b"")
+    ///     .try_into_cst()
+    ///     .unwrap()
+    ///     .root();
+    ///
+    /// assert!(empty.token_at_offset(0).is_none());
+    /// ```
+    pub fn token_at_offset(&self, offset: usize) -> Option<Token<M>> {
+        if !self.span().range().contains(&offset) {
+            return None;
+        }
+        self.inner
+            .token_at_offset(offset.try_into().ok()?)
+            .right_biased()
+            .map(Token::new)
+    }
+
+    /// Returns the token at a given position within the source code.
+    ///
+    /// Both line and column numbers are zero-based. If the line and column
+    /// numbers point to code that is outside the current node, this function
+    /// returns `None`.
+    ///
+    /// ```rust
+    /// # use yara_x_parser::cst::{Utf32, SyntaxKind};
+    /// use yara_x_parser::Parser;
+    /// let mut root_node = Parser::new(
+    /// br#"rule test {
+    /// condition:
+    ///   true or
+    ///   false
+    /// }"#)
+    ///     .try_into_cst()
+    ///     .unwrap()
+    ///     .root();
+    ///
+    /// // Token at line 0, column 0 is `SyntaxKind::RULE_KW`.
+    /// assert_eq!(
+    ///     root_node.token_at_position::<Utf32, _>((0,0)).unwrap().kind(),
+    ///     SyntaxKind::RULE_KW);
+    ///
+    /// // Token at line 1, column 0 is `SyntaxKind::CONDITION_KW`.
+    /// assert_eq!(
+    ///     root_node.token_at_position::<Utf32, _>((1,0)).unwrap().kind(),
+    ///     SyntaxKind::CONDITION_KW);
+    ///
+    /// // Token at line 2, column 2 is `SyntaxKind::TRUE_KW`.
+    /// assert_eq!(
+    ///     root_node.token_at_position::<Utf32, _>((2,2)).unwrap().kind(),
+    ///     SyntaxKind::TRUE_KW);
+    ///
+    /// // Token at line 3, column 6 is `SyntaxKind::FALSE_KW`.
+    /// assert_eq!(
+    ///     root_node.token_at_position::<Utf32, _>((3,6)).unwrap().kind(),
+    ///     SyntaxKind::FALSE_KW);
+    /// ```
+    pub fn token_at_position<E: Encoding, P: Into<Position<E>>>(
+        &self,
+        position: P,
+    ) -> Option<Token<M>> {
+        let position = position.into();
+        let mut line = 0;
+        let mut col = 0;
+        let mut next_token = self.root().first_token();
+
+        while let Some(token) = next_token {
+            let token_len = token.len::<E>();
+            if position.line == line
+                && position.column >= col
+                && position.column < col + token_len
+            {
+                return Some(token);
+            }
+            match token.kind() {
+                NEWLINE => {
+                    // When a newline found, the line number is incremented and
+                    // column number reset to zero.
+                    line += 1;
+                    col = 0;
+                }
+                COMMENT => {
+                    let comment = token.text();
+                    // Get the number of newline characters contained in the
+                    // comment.
+                    let newlines =
+                        comment.chars().filter(|c| *c == '\n').count();
+                    // Increment the current line in the number of lines in the
+                    // comment.
+                    line += newlines;
+                    // After the increment, the line number is past the requested
+                    // line, this means the requested position is within the
+                    // comment.
+                    if line > position.line {
+                        return Some(token);
+                    }
+                    let last_line = match comment.rfind('\n') {
+                        Some(idx) => &comment[idx + 1..],
+                        None => comment, // no newline → whole comment
+                    };
+                    // If there is some newline, column number is reset to zero.
+                    if newlines > 0 {
+                        col = 0;
+                    }
+                    col += E::len(last_line);
+                    // After the incrementing line and column numbers, the
+                    // requested position is in the final line, and before the
+                    // column where the comment ends. This means that the
+                    // requested position is within the comment.
+                    if line == position.line && col > position.column {
+                        return Some(token);
+                    }
+                }
+                _ => {
+                    col += token_len;
+                }
+            }
+            // If we are past the requested line, the token can't be found.
+            if line > position.line {
+                return None;
+            }
+            next_token = token.next_token();
+        }
+
+        None
+    }
+}
+
+impl Node<Immutable> {
+    /// Converts an immutable node into a mutable one.
+    pub fn into_mut(self) -> Node<Mutable> {
+        Node::new(self.inner.clone_for_update())
+    }
+}
+
+impl Node<Mutable> {
+    /// Detach the node from the CST it belongs to.
+    pub fn detach(&self) {
+        self.inner.detach()
+    }
+}
+
+/// An iterator that returns the children of a CST node, including only
+/// nodes, not tokens.
+///
+/// This is the value returned by [`Node::children`].
+///
+/// NOTE: This API is still unstable and should not be used by third-party code.
+#[doc(hidden)]
+pub struct Nodes<M> {
+    inner: rowan::SyntaxNodeChildren<YARA>,
+    _mutability: PhantomData<M>,
+}
+
+impl<M> Iterator for Nodes<M> {
+    type Item = Node<M>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.inner.next().map(Node::new)
+    }
+}
+
+/// An iterator that returns the children of a CST node, including both nodes
+/// and tokens.
+///
+/// This is the value returned by [`Node::children_with_tokens`].
+///
+/// NOTE: This API is still unstable and should not be used by third-party code.
+#[doc(hidden)]
+pub struct NodesAndTokens<M> {
+    inner: rowan::SyntaxElementChildren<YARA>,
+    _mutability: PhantomData<M>,
+}
+
+impl<M> Iterator for NodesAndTokens<M> {
+    type Item = NodeOrToken<M>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.inner.next().map(|x| x.into())
+    }
+}
