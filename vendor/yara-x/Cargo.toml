@@ -13,7 +13,7 @@
 edition = "2024"
 rust-version = "1.91.0"
 name = "yara-x"
-version = "1.16.0"
+version = "1.17.0"
 authors = ["Victor M. Alvarez <vmalvarez@virustotal.com>"]
 build = "build.rs"
 exclude = [
@@ -77,7 +77,6 @@ default = [
     "exact-atoms",
     "fast-regexp",
     "generate-proto-code",
-    "inventory",
 ]
 default-modules = [
     "console-module",
@@ -126,8 +125,6 @@ hash-module = [
     "dep:sha2",
     "dep:crc32fast",
 ]
-inventory = ["dep:inventory"]
-linkme = ["dep:linkme"]
 lnk-module = [
     "dep:uuid",
     "dep:nom",
@@ -168,8 +165,18 @@ vt-module = [
 name = "yara_x"
 path = "src/lib.rs"
 
+[[bench]]
+name = "dex"
+path = "benches/dex.rs"
+harness = false
+
+[[bench]]
+name = "pe"
+path = "benches/pe.rs"
+harness = false
+
 [dependencies.annotate-snippets]
-version = "0.12.15"
+version = "0.12.16"
 
 [dependencies.anyhow]
 version = "1.0.102"
@@ -182,11 +189,12 @@ version = "2.0.1"
 features = ["serde"]
 
 [dependencies.bitflags]
-version = "2.11.0"
+version = "2.11.1"
 features = ["serde"]
 
 [dependencies.bitvec]
 version = "1.0.1"
+features = ["serde"]
 
 [dependencies.bstr]
 version = "1.12.1"
@@ -229,11 +237,10 @@ version = "2.14.0"
 features = ["serde"]
 
 [dependencies.intaglio]
-version = "1.13.3"
+version = "1.15.1"
 
 [dependencies.inventory]
 version = "0.3.24"
-optional = true
 
 [dependencies.ipnet]
 version = "2.12.0"
@@ -242,12 +249,8 @@ optional = true
 [dependencies.itertools]
 version = "0.14.0"
 
-[dependencies.linkme]
-version = "0.3.35"
-optional = true
-
 [dependencies.log]
-version = "0.4.29"
+version = "0.4.30"
 optional = true
 
 [dependencies.magic]
@@ -294,7 +297,7 @@ optional = true
 version = "3.7.2"
 
 [dependencies.psl]
-version = "2.1.202"
+version = "2.1.210"
 optional = true
 
 [dependencies.quanta]
@@ -319,7 +322,7 @@ version = "0.9.10"
 optional = true
 
 [dependencies.rustc-hash]
-version = "2.1.1"
+version = "2.1.2"
 
 [dependencies.serde]
 version = "1.0.228"
@@ -340,7 +343,7 @@ features = ["oid"]
 optional = true
 
 [dependencies.simd-adler32]
-version = "0.3.8"
+version = "0.3.9"
 optional = true
 
 [dependencies.simd_cesu8]
@@ -369,10 +372,10 @@ version = "0.18.0"
 optional = true
 
 [dependencies.yara-x-macros]
-version = "1.16.0"
+version = "1.17.0"
 
 [dependencies.yara-x-parser]
-version = "1.16.0"
+version = "1.17.0"
 features = ["serde"]
 
 [dependencies.zip]
@@ -380,6 +383,9 @@ version = "8.2.0"
 features = ["deflate"]
 optional = true
 default-features = false
+
+[dev-dependencies.criterion]
+version = "0.5"
 
 [dev-dependencies.globwalk]
 version = "0.9.1"
@@ -394,10 +400,10 @@ version = "3.0.0"
 version = "1.4.1"
 
 [dev-dependencies.rayon]
-version = "1.11.0"
+version = "1.12.0"
 
 [dev-dependencies.yara-x-proto-yaml]
-version = "1.16.0"
+version = "1.17.0"
 
 [dev-dependencies.zip]
 version = "8.2.0"
@@ -421,11 +427,11 @@ version = "3.7.2"
 optional = true
 
 [build-dependencies.yara-x-proto]
-version = "1.16.0"
+version = "1.17.0"
 optional = true
 
 [target.'cfg(not(target_family = "wasm"))'.dependencies.wasmtime]
-version = "43.0.1"
+version = "43.0.2"
 features = [
     "cranelift",
     "runtime",

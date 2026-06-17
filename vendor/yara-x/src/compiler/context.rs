@@ -10,9 +10,9 @@ use yara_x_parser::ast::{Ident, WithSpan};
 use crate::compiler::errors::{CompileError, UnknownPattern};
 use crate::compiler::ir::{IR, PatternIdx};
 use crate::compiler::report::ReportBuilder;
-use crate::compiler::{Warnings, ir};
+use crate::compiler::{RegexId, RegexSetId, Warnings, ir};
 use crate::errors::{UnknownField, UnknownIdentifier};
-use crate::modules::BUILTIN_MODULES;
+use crate::string_pool::StringPool;
 use crate::symbols::{StackedSymbolTable, Symbol, SymbolLookup};
 use crate::types::Type;
 use crate::wasm;
@@ -65,6 +65,12 @@ pub(crate) struct CompileContext<'a, 'src> {
     /// Tracks the product of iteration counts of nested loops.
     /// Used to detect loops that may iterate an excessive number of times.
     pub loop_iteration_multiplier: i64,
+
+    /// Grouped RegexSets constructed during IR creation for or-expressions.
+    pub regex_sets: &'a mut rustc_hash::FxHashMap<RegexSetId, Vec<RegexId>>,
+
+    /// Pool for regular expressions.
+    pub regex_pool: &'a mut StringPool<RegexId>,
 }
 
 impl<'src> CompileContext<'_, 'src> {
@@ -121,6 +127,8 @@ impl<'src> CompileContext<'_, 'src> {
             // If the current symbol table is `None` it means that the
             // identifier is not a field or method of some structure.
             return if symbol_table.is_none() {
+                let module = crate::modules::registered_modules()
+                    .find(|module| module.name() == ident.name);
                 // Build the error for the unknown identifier.
                 let mut err = UnknownIdentifier::build(
                     self.report_builder,
@@ -128,18 +136,16 @@ impl<'src> CompileContext<'_, 'src> {
                     self.report_builder.span_to_code_loc(ident.span()),
                     // Add a note about the missing import statement if
                     // the unknown identifier is a module name.
-                    if BUILTIN_MODULES.contains_key(ident.name) {
-                        Some(format!(
+                    module.map(|m| {
+                        format!(
                             "there is a module named `{}`, but the `import \"{}\"` statement is missing",
-                            ident.name, ident.name
-                        ))
-                    } else {
-                        None
-                    },
+                            m.name(), m.name())
+                        }
+                    )
                 );
                 // If the identifier is a known module, add a fix that inserts
                 // the import statement at the beginning of the file.
-                if BUILTIN_MODULES.contains_key(ident.name) {
+                if module.is_some() {
                     err.report_mut().patch(
                         self.report_builder.span_to_code_loc(Span(0..0)),
                         format!("import \"{}\"\n", ident.name),

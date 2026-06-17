@@ -1,6 +1,6 @@
 [package]
 name = "loki"
-version = "2.10.0"
+version = "2.13.0"
 edition = "2021"
 
 [[bin]]
@@ -32,7 +32,7 @@ hex = "0.4.3"
 memmap2 = "0.9.9"
 chrono = { version = "0.4.43", features = ["serde"] }
 regex = "1.12.3"
-yara-x = "1.16.0"
+yara-x = "1.17.0"
 zip = { version = "7.0", default-features = false, features = [
     "aes-crypto",
     "bzip2",

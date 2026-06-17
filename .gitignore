@@ -13,6 +13,7 @@ target/
 .DS_Store
 .vscode/*
 *.log
+loki_rune_*.jsonl
 signatures
 signatures/yara/test.yar
 signatures/yara/faulty.yar

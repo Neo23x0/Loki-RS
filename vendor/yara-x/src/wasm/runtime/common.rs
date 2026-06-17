@@ -143,11 +143,18 @@ pub(crate) trait AsContextMut: AsContext {
     ) -> StoreContextMut<'_, Self::Data, Self::Backend>;
 }
 
-/// Storage for user data plus backend-specific runtime state.
+/// Context containing the state of a WebAssembly execution, including
+/// user data and backend-specific runtime state.
+///
+/// The `Store` is a core type in both Wasmtime and the browser shim.
+/// It holds the state of the scanner (via the generic user data
+/// parameter `T`, typically `ScanContext`), and registers any
+/// instantiated globals, memories, or callbacks needed by the backend.
 pub(crate) struct Store<T, B: RuntimeBackend> {
-    /// User data associated with the store.
+    /// User data associated with the store (e.g., `ScanContext`).
     data: T,
-    /// Backend-specific runtime state for globals, memories and callbacks.
+    /// Backend-specific runtime state (e.g., references to browser memory
+    /// structures).
     pub(crate) runtime: B::RuntimeState,
     _engine: Engine,
     _backend: PhantomData<B>,
@@ -253,12 +260,23 @@ impl<T, B: RuntimeBackend> AsContextMut for Pin<Box<Store<T, B>>> {
     }
 }
 
-/// View passed to host callbacks.
-pub(crate) struct Caller<'a, T, B: RuntimeBackend> {
-    /// Store being used for the callback.
+/// Represents the host execution context passed as the first argument to
+/// WASM host callbacks.
+///
+/// In both `wasmtime` and the custom browser backend, when guest WASM code calls
+/// an imported host function, it yields control back to the host. The `Caller`
+/// structure wraps a mutable reference to the executing [`Store`], providing
+/// the host callback safe access to:
+/// - The store's custom user data `T` (typically `ScanContext`), via `data()`
+///   and `data_mut()`.
+/// - The store context and execution backend.
+#[allow(private_bounds)]
+pub struct Caller<'a, T, B: RuntimeBackend> {
+    /// Access to the underlying `Store` context.
     pub(crate) store: &'a mut Store<T, B>,
 }
 
+#[allow(private_bounds)]
 impl<'a, T, B: RuntimeBackend> Caller<'a, T, B> {
     /// Creates a caller from a mutable store reference.
     pub(crate) fn new(store: &'a mut Store<T, B>) -> Self {
@@ -367,7 +385,7 @@ impl Engine {
 
 /// Value types supported by generated WASM code.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum ValType {
+pub enum ValType {
     /// A 64-bit integer.
     I64,
     /// A 32-bit integer.
@@ -380,7 +398,7 @@ pub(crate) enum ValType {
 
 /// Raw value passed across host callback trampolines.
 #[derive(Clone, Copy, Debug, Default)]
-pub(crate) struct ValRaw(u64);
+pub struct ValRaw(u64);
 
 impl ValRaw {
     /// Creates a raw value from an `i64`.
@@ -476,14 +494,25 @@ pub(crate) struct RegisteredFunc<T, B: RuntimeBackend> {
     pub(crate) trampoline: HostFunc<T, B>,
 }
 
-/// Handle to a global defined in the store.
+/// A backend-agnostic reference to a WebAssembly global variable defined within
+/// a [`Store`].
+///
+/// In the browser backend, globals are backed by a JS `WebAssembly.Global`
+/// object, while in the native backend they map directly to `wasmtime::Global`.
 #[derive(Clone, Copy)]
 pub(crate) struct Global {
     /// Backend-specific global identifier.
     pub(crate) id: usize,
 }
 
-/// Handle to a memory defined in the store.
+/// A backend-agnostic reference to a WebAssembly linear memory defined within
+/// a [`Store`].
+///
+/// Wasm execution relies on a primary block of linear memory for passing large
+/// payloads (like the scanned file/haystack) and reading back results (like
+/// matching rule bitmaps). This handle manages mutable or immutable access to
+/// the memory, performing automatic synchronization with browser/JS-side
+/// memory buffers when targeting the browser backend.
 #[derive(Clone, Copy)]
 pub(crate) struct Memory {
     /// Backend-specific memory identifier.
@@ -520,7 +549,14 @@ pub(crate) struct DefinedExtern {
     pub(crate) value: Extern,
 }
 
-/// Linker used for registering imports and instantiating modules.
+/// A helper structure used to link WebAssembly modules to host functions,
+/// globals, and memories.
+///
+/// The `Linker` serves as a registry for host imports defined in Rust (e.g.,
+/// regex engines, utility functions, and global attributes). When a compiled
+/// YARA-X rule module is instantiated, the `Linker` automatically links
+/// these registered imports into the Wasm instance, resolving target specific
+/// details behind a uniform interface.
 pub(crate) struct Linker<T, B: RuntimeBackend> {
     /// Functions registered in the linker.
     pub(crate) functions: Vec<RegisteredFunc<T, B>>,
@@ -762,9 +798,14 @@ impl<B: RuntimeBackend> Module<B> {
     }
 }
 
-/// Instantiated module.
+/// An instantiated WebAssembly module ready for execution.
+///
+/// The `Instance` wraps a compiled Wasm module that has been successfully
+/// linked to its host imports. It exposes exported functions, allowing the
+/// caller to retrieve type-safe handles for invocation.
 pub(crate) struct Instance<B: RuntimeBackend> {
-    /// Backend-specific instance representation.
+    /// Backend-specific instance representation (e.g., JS
+    /// `WebAssembly.Instance` or `wasmtime::Instance`).
     pub(crate) inner: B::InstanceInner,
     _backend: PhantomData<B>,
 }
@@ -788,7 +829,12 @@ impl<B: RuntimeBackend> Instance<B> {
     }
 }
 
-/// Typed function exported by an [`Instance`].
+/// A strongly typed handle to a WebAssembly function exported by an
+/// [`Instance`].
+///
+/// Calling this function invokes the compiled WASM bytecode with compile-time
+/// signature checks, passing parameters and retrieving results through
+/// optimized target-specific channels.
 pub(crate) struct TypedFunc<P, R, B: RuntimeBackend> {
     inner: B::TypedFuncHandle,
     _params: PhantomData<P>,
