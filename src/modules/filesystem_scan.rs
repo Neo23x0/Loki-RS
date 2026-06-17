@@ -161,15 +161,47 @@ fn is_cloud_or_remote_path(path: &str) -> bool {
     false
 }
 
+#[cfg(any(windows, test))]
+fn windows_drive_root(path: &str) -> Option<String> {
+    let path = path.trim_matches('"').replace('/', "\\");
+
+    if path.len() >= 6 && path[..4].eq_ignore_ascii_case(r"\\?\") {
+        let bytes = path.as_bytes();
+        if bytes.get(4).is_some_and(|b| b.is_ascii_alphabetic()) && bytes.get(5) == Some(&b':') {
+            return Some(format!(r"\\?\{}:\", bytes[4] as char));
+        }
+    }
+
+    if path.len() >= 8 && path[..8].eq_ignore_ascii_case(r"\\?\UNC\") {
+        let rest = &path[8..];
+        let mut parts = rest.split('\\').filter(|part| !part.is_empty());
+        let server = parts.next()?;
+        let share = parts.next()?;
+        return Some(format!(r"\\?\UNC\{}\{}\", server, share));
+    }
+
+    if let Some(rest) = path.strip_prefix(r"\\") {
+        let mut parts = rest.split('\\').filter(|part| !part.is_empty());
+        let server = parts.next()?;
+        let share = parts.next()?;
+        return Some(format!(r"\\{}\{}\", server, share));
+    }
+
+    let bytes = path.as_bytes();
+    if bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':' {
+        return Some(format!("{}:\\", bytes[0] as char));
+    }
+
+    None
+}
+
 // Check if a root path is a network drive (Windows only)
 #[cfg(windows)]
 fn is_network_drive(path: &str) -> bool {
-    // Need a root path like "C:\" or "\\server\share"
-    // If path is just a letter "C:", append backslash
-    let root = if path.len() == 2 && path.chars().nth(1) == Some(':') {
-        format!("{}\\", path)
-    } else {
-        path.to_string()
+    // GetDriveTypeW expects a root such as "C:\" or "\\server\share\".
+    // Passing a full path can return DRIVE_NO_ROOT_DIR and falsely look remote.
+    let Some(root) = windows_drive_root(path) else {
+        return false;
     };
     
     let h_root = HSTRING::from(&root);
@@ -1189,6 +1221,41 @@ mod tests {
 
     mod path_exclusion_tests {
         use super::*;
+
+        #[test]
+        fn test_windows_drive_root_from_full_path_with_spaces() {
+            let path = r"J:\SteamLibrary\steamapps\common\SpaceCraft beta";
+            assert_eq!(windows_drive_root(path).as_deref(), Some(r"J:\"));
+        }
+
+        #[test]
+        fn test_windows_drive_root_from_forward_slashes() {
+            let path = "J:/SteamLibrary/steamapps/common/SpaceCraft beta";
+            assert_eq!(windows_drive_root(path).as_deref(), Some(r"J:\"));
+        }
+
+        #[test]
+        fn test_windows_drive_root_from_drive_only() {
+            assert_eq!(windows_drive_root("J:").as_deref(), Some(r"J:\"));
+        }
+
+        #[test]
+        fn test_windows_drive_root_from_unc_path() {
+            let path = r"\\server\share\SteamLibrary\steamapps\common\SpaceCraft beta";
+            assert_eq!(
+                windows_drive_root(path).as_deref(),
+                Some(r"\\server\share\")
+            );
+        }
+
+        #[test]
+        fn test_windows_drive_root_from_extended_unc_path() {
+            let path = r"\\?\UNC\server\share\SteamLibrary\SpaceCraft beta";
+            assert_eq!(
+                windows_drive_root(path).as_deref(),
+                Some(r"\\?\UNC\server\share\")
+            );
+        }
 
         #[test]
         fn test_linux_path_skips_proc() {
