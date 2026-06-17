@@ -2075,7 +2075,7 @@ dependencies = [
 
 [[package]]
 name = "loki"
-version = "2.10.0"
+version = "2.13.0"
 dependencies = [
  "arrayvec",
  "atty",
