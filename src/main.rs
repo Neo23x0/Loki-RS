@@ -23,8 +23,8 @@ struct Cli {
     // SCAN TARGET
     // =========================================================================
     
-    /// Folder to scan (default: entire system)
-    #[arg(short = 'f', long, help_heading = "Scan Target")]
+    /// Folder to scan (quote paths containing spaces)
+    #[arg(short = 'f', long, value_name = "PATH", help_heading = "Scan Target")]
     folder: Option<String>,
 
     // =========================================================================

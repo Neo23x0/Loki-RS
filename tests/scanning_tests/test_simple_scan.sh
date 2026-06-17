@@ -19,6 +19,10 @@ echo "Creating test files in $TEST_DIR..."
 echo "This is a test file" > "$TEST_DIR/test.txt"
 echo "Another test file" > "$TEST_DIR/another.txt"
 
+SPACE_DIR="$TEST_DIR/SpaceCraft beta"
+mkdir -p "$SPACE_DIR"
+echo "echo spacecraft beta" > "$SPACE_DIR/launcher.bat"
+
 # Test basic scan (using --no-fs is wrong - we want to scan the filesystem!)
 # Just run a simple scan on the test directory with --no-procs to skip process scanning
 echo "Testing basic scan on test directory..."
@@ -34,6 +38,21 @@ else
     echo "  Expected: Output containing scan progress/completion messages"
     echo "  Actual output:"
     echo "$scan_output"
+    test_passed=false
+fi
+
+# Test a folder path containing spaces. This catches shell quoting and CLI
+# argument handling regressions for Windows-style game/install folder names.
+echo "Testing scan on directory with spaces..."
+space_scan_output=$(./build/loki -f "$SPACE_DIR" --no-procs --no-tui --no-html --no-log --no-jsonl 2>&1) || true
+
+if echo "$space_scan_output" | grep -qE "(LOKI scan started|Scan completed|Files scanned)"; then
+    echo "✓ Path with spaces scan: PASS"
+else
+    echo "✗ Path with spaces scan: FAIL"
+    echo "  Expected: Output containing scan progress/completion messages"
+    echo "  Actual output:"
+    echo "$space_scan_output"
     test_passed=false
 fi
 
