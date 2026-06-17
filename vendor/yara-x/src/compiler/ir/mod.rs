@@ -51,7 +51,7 @@ use crate::compiler::ir::dfs::{
     DFSIter, DFSWithScopeIter, Event, EventContext, dfs_common,
 };
 
-use crate::compiler::FilesizeBounds;
+use crate::compiler::{FilesizeBounds, RegexSetId};
 use crate::re;
 use crate::symbols::Symbol;
 use crate::types::Value::Const;
@@ -107,6 +107,7 @@ pub(crate) struct PatternInRule<'src> {
     pattern: Pattern,
     span: Span,
     in_use: bool,
+    fast_scan_allowed: bool,
 }
 
 impl<'src> PatternInRule<'src> {
@@ -181,6 +182,27 @@ impl<'src> PatternInRule<'src> {
     /// to indicate that the pattern is in use.
     pub fn mark_as_used(&mut self) -> &mut Self {
         self.in_use = true;
+        self
+    }
+
+    /// Returns true if this pattern can be fast-scanned.
+    ///
+    /// A pattern can be fast-scanned if its occurrences are only evaluated
+    /// as simple boolean checks (e.g. `$a`), meaning the scanner can stop
+    /// tracking matches for it once the first match has been found.
+    #[inline]
+    pub fn fast_scan_allowed(&self) -> bool {
+        self.fast_scan_allowed
+    }
+
+    /// Disallows fast-scanning for this pattern.
+    ///
+    /// This is called when the pattern is used in a context that requires
+    /// tracking all matches (such as count `#a`, offset `@a`, length `!a`,
+    /// anchored checks, or loop equivalents).
+    #[inline]
+    pub fn disallow_fast_scan(&mut self) -> &mut Self {
+        self.fast_scan_allowed = false;
         self
     }
 }
@@ -1556,6 +1578,20 @@ impl IR {
         expr_id
     }
 
+    /// Creates a new [`Expr::MatchesMany`].
+    pub fn matches_regex_set(
+        &mut self,
+        lhs: ExprId,
+        regex_set: RegexSetId,
+    ) -> ExprId {
+        let expr_id = ExprId::from(self.nodes.len());
+        self.parents[lhs.0 as usize] = expr_id;
+        self.parents.push(ExprId::none());
+        self.nodes.push(Expr::MatchesMany { lhs, regex_set });
+        debug_assert_eq!(self.parents.len(), self.nodes.len());
+        expr_id
+    }
+
     /// Creates a new [`Expr::PatternMatch`]
     pub fn pattern_match(
         &mut self,
@@ -2000,6 +2036,7 @@ impl Debug for IR {
                         Expr::IEndsWith { .. } => writeln!(f, "IENDS_WITH -- hash: {expr_hash:#08x}")?,
                         Expr::IEquals { .. } => writeln!(f, "IEQUALS -- hash: {expr_hash:#08x}")?,
                         Expr::Matches { .. } => writeln!(f, "MATCHES -- hash: {expr_hash:#08x}")?,
+                        Expr::MatchesMany { regex_set, .. } => writeln!(f, "MATCHES_MANY RegexSetId({}) -- hash: {expr_hash:#08x}", usize::from(*regex_set))?,
                         Expr::Defined { .. } => writeln!(f, "DEFINED -- hash: {expr_hash:#08x}")?,
                         Expr::FieldAccess { .. } => writeln!(f, "FIELD_ACCESS -- hash: {expr_hash:#08x}")?,
                         Expr::With { .. } => writeln!(f, "WITH -- hash: {expr_hash:#08x}")?,
@@ -2234,6 +2271,10 @@ pub(crate) enum Expr {
 
     /// `matches` expression.
     Matches { rhs: ExprId, lhs: ExprId },
+
+    /// Match expression similar to `Expr::Matches` but that matches against
+    /// multiple regular expressions at the same time.
+    MatchesMany { lhs: ExprId, regex_set: RegexSetId },
 
     /// A `defined` expression (e.g. `defined foo`)
     Defined { operand: ExprId },
@@ -2682,6 +2723,11 @@ impl Expr {
                     *rhs = replacement;
                 }
             }
+            Expr::MatchesMany { lhs, .. } => {
+                if *lhs == child {
+                    *lhs = replacement;
+                }
+            }
             Expr::PatternMatch { anchor, .. }
             | Expr::PatternMatchVar { anchor, .. } => {
                 replace_in_anchor(anchor)
@@ -2786,6 +2832,7 @@ impl Expr {
             | Expr::IEndsWith { .. }
             | Expr::IEquals { .. }
             | Expr::Matches { .. }
+            | Expr::MatchesMany { .. }
             | Expr::PatternMatch { .. }
             | Expr::PatternMatchVar { .. }
             | Expr::OfExprTuple(_)
@@ -2857,6 +2904,7 @@ impl Expr {
             | Expr::IEndsWith { .. }
             | Expr::IEquals { .. }
             | Expr::Matches { .. }
+            | Expr::MatchesMany { .. }
             | Expr::PatternMatch { .. }
             | Expr::PatternMatchVar { .. }
             | Expr::OfExprTuple(_)
