@@ -1,2 +1,0 @@
-ERRORS:
-- SyntaxError { message: "expecting operator or `}`, found end of file", span: Span(27..27) }

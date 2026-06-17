@@ -1,6 +1,0 @@
-rule test {
-	strings:
-		$b = "foobar\""
-	condition:
-	  $a
-}

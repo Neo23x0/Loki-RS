@@ -1,2 +1,0 @@
-ERRORS:
-- SyntaxError { message: "expecting `=`, found `condition`", span: Span(30..39) }

@@ -1,6 +1,0 @@
-rule test {
-	condition:
-		with two = 1+1 : ( 
-            two == 2
-        )
-}

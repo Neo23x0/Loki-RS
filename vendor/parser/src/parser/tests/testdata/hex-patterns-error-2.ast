@@ -1,3 +1,0 @@
-ERRORS:
-- SyntaxError { message: "expecting `[`, BYTE, `(` or `}`, found `0`", span: Span(33..34) }
-- SyntaxError { message: "expecting `[`, BYTE, `(` or `}`, found `a`", span: Span(93..94) }

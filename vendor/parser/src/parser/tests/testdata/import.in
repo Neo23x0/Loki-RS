@@ -1,5 +1,0 @@
-import "foo"
-
-rule test { condition: false }
-
-import "bar"

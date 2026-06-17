@@ -86,13 +86,9 @@ impl MangledFnName {
     pub fn as_str(&self) -> &str {
         self.0.as_str()
     }
+}
 
-    /// Returns the plain function name, without argument or return type
-    /// information (i.e: everything before the `@` in the name).
-    pub fn plain_name(&self) -> &str {
-        self.0.as_str().split("@").next().unwrap()
-    }
-
+impl MangledFnName {
     /// Returns the types of arguments and return value for the function.
     pub fn unmangle(&self) -> (Vec<(&str, TypeValue)>, TypeValue) {
         let (_fn_name, arg_names_and_types, ret_type) =

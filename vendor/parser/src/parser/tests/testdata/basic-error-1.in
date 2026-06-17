@@ -1,6 +1,0 @@
-rule test {{
-  meta:
-     foo = 1
-  condition:
-     true
-}

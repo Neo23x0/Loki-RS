@@ -1,8 +1,0 @@
-rule test {
-  strings:
-    $a = "foo"
-    $b = bar
-    $c = "baz"
-  condition:
-    true
-}

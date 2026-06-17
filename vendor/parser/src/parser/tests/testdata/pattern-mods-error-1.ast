@@ -1,3 +1,0 @@
-ERRORS:
-- SyntaxError { message: "expecting pattern modifier, pattern identifier or `condition`, found `foo`", span: Span(36..39) }
-- SyntaxError { message: "expecting STRING, found `)`", span: Span(107..108) }

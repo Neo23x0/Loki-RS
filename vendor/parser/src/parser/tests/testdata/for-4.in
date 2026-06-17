@@ -1,4 +1,0 @@
-rule test {
-  condition:
-    for any key,value in some_dic : ( true )
-}

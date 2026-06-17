@@ -1,2 +1,0 @@
-ERRORS:
-- SyntaxError { message: "expecting `meta`, `strings` or `condition`, found `}`", span: Span(11..12) }

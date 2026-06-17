@@ -1,5 +1,0 @@
-include "foo"
-
-rule test { condition: false }
-
-include "bar"

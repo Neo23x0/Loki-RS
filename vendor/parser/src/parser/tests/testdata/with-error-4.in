@@ -1,6 +1,0 @@
-rule test {
-    condition:
-        with foo = 1 : (
-            foo.
-        )
-}

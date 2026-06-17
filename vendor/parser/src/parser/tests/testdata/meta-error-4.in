@@ -1,7 +1,0 @@
-rule test {
-  meta:
-    foo = meta
-    bar = "bar"
-  condition:
-	  true
-}
