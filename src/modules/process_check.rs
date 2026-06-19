@@ -401,7 +401,7 @@ fn process_single_process(
     // 3. YARA scanning (Memory)
     // YARA-X: Create scanner and scan process memory
     let mut scanner = Scanner::new(compiled_rules);
-    scanner.set_timeout(std::time::Duration::from_secs(30));
+    scanner.set_timeout(std::time::Duration::from_secs(scan_config.yara_timeout));
     
     // Read process memory
     #[cfg(target_os = "macos")]

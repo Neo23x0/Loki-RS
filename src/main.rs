@@ -115,6 +115,15 @@ struct Cli {
     #[arg(short = 'm', long, default_value_t = 64_000_000, help_heading = "Tuning")]
     max_file_size: usize,
 
+    /// YARA scan timeout per file/process in seconds
+    #[arg(
+        long,
+        default_value_t = 10,
+        value_parser = clap::value_parser!(u64).range(1..),
+        help_heading = "Tuning"
+    )]
+    yara_timeout: u64,
+
     /// CPU utilization limit percentage (1-100)
     #[arg(short = 'c', long, default_value_t = 100, help_heading = "Tuning")]
     cpu_limit: u8,
@@ -197,6 +206,7 @@ pub struct ScanConfig {
     pub warning_threshold: i16,
     pub notice_threshold: i16,
     pub max_reasons: usize,
+    pub yara_timeout: u64,
     pub threads: usize,
     pub cpu_limit: u8,
     pub exclusion_count: usize,
@@ -1244,6 +1254,7 @@ fn main() {
         warning_threshold: args.warning_level,
         notice_threshold: args.notice_level,
         max_reasons: args.max_reasons,
+        yara_timeout: args.yara_timeout,
         threads: num_threads,
         cpu_limit: args.cpu_limit,
         exclusion_count,
@@ -1295,6 +1306,7 @@ fn main() {
     // Print scan configuration limits
     logger.info_w("Scan limits", &[
         ("MAX_FILE_SIZE", &format!("{} bytes ({:.1} MB)", scan_config.max_file_size, scan_config.max_file_size as f64 / 1_000_000.0)),
+        ("YARA_TIMEOUT", &format!("{} seconds", scan_config.yara_timeout)),
     ]);
     logger.info_w("Scan limits", &[
         ("SCAN_ALL_TYPES", &scan_config.scan_all_types.to_string()),
@@ -1955,6 +1967,7 @@ mod tests {
                 warning_threshold: 60,
                 notice_threshold: 40,
                 max_reasons: 2,
+                yara_timeout: 10,
                 threads: 4,
                 cpu_limit: 100,
                 exclusion_count: 0,
@@ -1984,6 +1997,7 @@ mod tests {
                 warning_threshold: 60,
                 notice_threshold: 40,
                 max_reasons: 2,
+                yara_timeout: 10,
                 threads: 4,
                 cpu_limit: 100,
                 exclusion_count: 0,
@@ -2653,6 +2667,7 @@ mod tests {
                 warning_threshold: 60,
                 notice_threshold: 40,
                 max_reasons: 2,
+                yara_timeout: 10,
                 threads: 4,
                 cpu_limit: 100,
                 exclusion_count: 0,
@@ -3305,6 +3320,7 @@ mod tests {
                 warning_threshold: 60,
                 notice_threshold: 40,
                 max_reasons: 2,
+                yara_timeout: 10,
                 threads: 4,
                 cpu_limit: 100,
                 exclusion_count: 0,

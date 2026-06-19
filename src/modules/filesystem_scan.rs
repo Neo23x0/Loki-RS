@@ -945,7 +945,14 @@ fn scan_memory_buffer(
         owner: "".to_string(),
     };
     
-    let yara_matches = scan_file(compiled_rules, content, scan_config, &ext_vars, path_display, logger);
+    let (yara_matches, yara_timed_out) = scan_file(compiled_rules, content, scan_config, &ext_vars, path_display, logger);
+    if yara_timed_out {
+        let message = format!(
+            "YARA scan timeout while scanning FILE: {} - skipping and continuing",
+            path_display
+        );
+        logger.error_w(&message, &[("FILE", path_display)]);
+    }
     for ymatch in yara_matches.iter() {
         if !sample_matches.is_full() {
             let match_message = format!("YARA match with rule {}", ymatch.rulename);
@@ -1038,12 +1045,11 @@ fn scan_file(
     ext_vars: &ExtVars,
     file_label: &str,
     logger: &UnifiedLogger,
-) -> ArrayVec<YaraMatch, 100> {
+) -> (ArrayVec<YaraMatch, 100>, bool) {
     // YARA-X: Create scanner from rules
     let mut scanner = Scanner::new(rules);
     
-    // Set timeout (in seconds)
-    scanner.set_timeout(std::time::Duration::from_secs(10));
+    scanner.set_timeout(std::time::Duration::from_secs(scan_config.yara_timeout));
     
     // Define external variables (global variables in YARA-X)
     // YARA-X accepts strings directly for set_global
@@ -1068,6 +1074,7 @@ fn scan_file(
     
     // Handle scan results
     let mut yara_matches = ArrayVec::<YaraMatch, 100>::new();
+    let mut timed_out = false;
     match results {
         Ok(scan_results) => {
             // YARA-X: Use matching_rules() to iterate over results
@@ -1153,10 +1160,7 @@ fn scan_file(
         Err(e) => {
             let err_text = format!("{:?}", e);
             if err_text.to_lowercase().contains("timeout") {
-                logger.warning(&format!(
-                    "YARA scan timeout while scanning FILE: {} - skipping and continuing",
-                    file_label
-                ));
+                timed_out = true;
             } else if scan_config.show_access_errors {
                 logger.error(&format!("YARA-X scan error FILE: {} ERROR: {:?}", file_label, e));
             } else {
@@ -1164,7 +1168,7 @@ fn scan_file(
             }
         }
     }
-    return yara_matches;
+    (yara_matches, timed_out)
 }
 
 #[cfg(test)]
