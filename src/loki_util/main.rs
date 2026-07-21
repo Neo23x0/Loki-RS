@@ -94,6 +94,26 @@ fn main() {
                 std::process::exit(1);
             }
         }
+        "encode" => {
+            if args.len() != 3 {
+                log_error(&format!("Arguments error\nUsage: loki-util encode <file/dir>"));
+                std::process::exit(1);
+            }
+            if let Err(e) = encode(Path::new(&args[2])) {
+                log_error(&format!("File {} failed to encode because {}", &args[2], e));
+                std::process::exit(1);
+            }
+        }
+        "decode" => {
+            if args.len() != 3 {
+                log_error(&format!("Arguments error\nUsage: loki-util decode <file/dir>"));
+                std::process::exit(1);
+            }
+            if let Err(e) = decode(Path::new(&args[2])) {
+                log_error(&format!("File {} failed to decode because {}", &args[2], e));
+                std::process::exit(1);
+            }
+        }
         "--help" | "-h" => {
             print_usage();
         }
@@ -128,7 +148,13 @@ fn print_usage() {
     println!("Commands:");
     println!("  {}   - Update YARA rules (YARA-Forge Core)", "update".green());
     println!("  {}  - Update Loki-RS program and signatures", "upgrade".green());
-    println!("  {}    - Generate HTML report from JSONL file(s)", "html".green());
+    println!("  {}     - Generate HTML report from JSONL file(s)", "html".green());
+    println!("  {}   - Encode YARA rules to reduce AV false positives", "encode".green());
+    println!("  {}   - Decode YARA rules to back to its original form", "decode".green());
+    println!();
+    println!("Encoding and decoding:");
+    println!("  loki-util encode <file/dir>");
+    println!("  loki-util decode <file/dir>");
     println!();
     println!("HTML Report Generation:");
     println!("  loki-util html --input <file.jsonl> --output <report.html>");
@@ -138,7 +164,7 @@ fn print_usage() {
     println!("  --input <file|glob>  - Input JSONL file or glob pattern");
     println!("  --output <file.html> - Output HTML file (optional, defaults to input.html)");
     println!("  --combine            - Combine multiple JSONL files into one report");
-    println!("  --title <str>       - Override report title");
+    println!("  --title <str>        - Override report title");
     println!("  --host <str>         - Override hostname");
     println!();
 }
@@ -669,4 +695,170 @@ fn expand_inputs(pattern: &str) -> Result<Vec<String>, Box<dyn std::error::Error
     files.sort();
     
     Ok(files)
+}
+
+fn rot47(buf: &mut [u8]) {
+    for b in buf {
+        if (33..=126).contains(b) {
+            *b = 33 + ((*b - 33 + 94 - 47) % 94);
+        }
+    }
+}
+
+use std::env;
+use std::fs::File;
+use std::io::{BufReader, BufWriter, Read, Write};
+
+fn encode(path: &Path) -> Result<(), Box<dyn std::error::Error>> {
+
+    if path.is_dir() {
+        let dir = fs::read_dir(path)?;
+
+        let mut found_files = false;
+
+        for entry in dir {
+            
+            let entry = match entry {
+                Ok(e) => e,
+                Err(_) => continue,
+            };
+
+            let file = entry.path();
+
+            if file.is_dir() {
+                continue;
+            }
+
+            found_files = true;
+
+            match encode(&file) {
+                Err(e) => {
+                    log_warn(&format!("File {} failed to encode because {}", file.to_str().unwrap(), e));
+                }
+                _ => {}
+            }
+        }
+
+        if !found_files {
+            log_error(&format!("No files were found in {}", path.display()));
+        }
+
+        return Ok(());
+    }
+
+    let ext = match path.extension().and_then(|e| e.to_str()) {
+        Some("yar") => "ryar",
+        Some("ryar") => return Err(format!("file is already encoded").into()),
+        Some(ext) => return Err(format!("file extension is unsupported: .{}", ext).into()),
+        None => return Err("file has no extension".into())
+    };
+
+    let new_path = path.with_extension(ext);
+
+    // Here `path` is guaranteed to be a file.
+    let input = File::open(path)?;
+    let mut reader = BufReader::new(input);
+
+    let output = File::create(new_path)?;
+    let mut writer = BufWriter::new(output);
+
+    let mut buffer = [0u8; 64 * 1024];
+
+    loop {
+        let n = reader.read(&mut buffer)?;
+        if n == 0 {
+            break;
+        }
+
+        rot47(&mut buffer[..n]);
+
+        writer.write_all(&buffer[..n])?;
+    }
+
+    writer.flush()?;
+
+    if let Err(e) = fs::remove_file(path) {
+        log_warn(&format!("Original file {} failed to delete. {}", path.display(), e));
+    }
+
+    log_success(&format!("Successfully encoded file: {}", path.display()));
+
+    Ok(())
+}
+
+fn decode(path: &Path) -> Result<(), Box<dyn std::error::Error>> {
+
+    if path.is_dir() {
+        let dir = fs::read_dir(path)?;
+
+        let mut found_files = false;
+
+        for entry in dir {
+            
+            let entry = match entry {
+                Ok(e) => e,
+                Err(_) => continue,
+            };
+
+            let file = entry.path();
+
+            if file.is_dir() {
+                continue;
+            }
+
+            found_files = true;
+
+            match decode(&file) {
+                Err(e) => {
+                    log_warn(&format!("File {} failed to decode because {}", file.to_str().unwrap(), e));
+                }
+                _ => {}
+            }
+        }
+
+        if !found_files {
+            log_error(&format!("No files were found in {}", path.display()));
+        }
+
+        return Ok(());
+    }
+
+    let ext = match path.extension().and_then(|e| e.to_str()) {
+        Some("ryar") => "yar",
+        Some("yar") => return Err(format!("file is already decoded").into()),
+        Some(ext) => return Err(format!("file extension is unsupported: .{}", ext).into()),
+        None => return Err("file has no extension".into())
+    };
+
+    let new_path = path.with_extension(ext);
+
+    // Here `path` is guaranteed to be a file.
+    let input = File::open(path)?;
+    let mut reader = BufReader::new(input);
+
+    let output = File::create(new_path)?;
+    let mut writer = BufWriter::new(output);
+
+    let mut buffer = [0u8; 64 * 1024];
+
+    loop {
+        let n = reader.read(&mut buffer)?;
+        if n == 0 {
+            break;
+        }
+
+        rot47(&mut buffer[..n]);
+
+        writer.write_all(&buffer[..n])?;
+    }
+
+    writer.flush()?;
+
+    if let Err(e) = fs::remove_file(path) {
+        log_warn(&format!("Original file {} failed to delete. {}", path.display(), e));
+    }
+
+    log_success(&format!("Successfully decoded file: {}", path.display()));
+
+    Ok(())
 }

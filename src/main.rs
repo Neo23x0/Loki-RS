@@ -781,6 +781,38 @@ fn get_filename_ioc_type(_filename_ioc_value: &str) -> FilenameIOCType {
     FilenameIOCType::Regex
 } 
 
+// Apply ROT47 encoding/decoding to a byte buffer.
+fn rot47(buf: &mut [u8]) {
+    for b in buf {
+        if (33..=126).contains(b) {
+            *b = 33 + ((*b - 33 + 94 - 47) % 94);
+        }
+    }
+}
+
+// Read a YARA rule file.
+// `.yar` files are read directly, while `.ryar` files are ROT47-decoded.
+// Returns the rule file contents as a UTF-8 string.
+fn read_rule_file(path: &std::path::Path) -> std::io::Result<String> {
+    match path.extension().and_then(|e| e.to_str()) {
+        Some("yar") => fs::read_to_string(path),
+        Some("ryar") => {
+            let mut bytes = fs::read(path)?;
+            rot47(&mut bytes);
+            Ok(
+                String::from_utf8(bytes)
+                    .map_err(|e| std::io::Error::new(
+                        std::io::ErrorKind::InvalidData, e
+                    ))?
+            )
+        }
+        _ => Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "unsupported rule extension",
+        )),
+    }
+}
+
 // Initialize the rule files
 // Returns (compiled_rules, rule_count)
 fn initialize_yara_rules(logger: &UnifiedLogger) -> Result<(Rules, usize), String> {
@@ -800,7 +832,12 @@ fn initialize_yara_rules(logger: &UnifiedLogger) -> Result<(Rules, usize), Strin
     // Filter 
     let filtered_files = files
         .filter_map(Result::ok)
-        .filter(|d| if let Some(e) = d.path().extension() { e == "yar" } else { false })
+        .filter(|d| {
+            matches!(
+                d.path().extension().and_then(|e| e.to_str()),
+                Some("yar" | "ryar")
+            )
+        })
         .into_iter();
     // Test compile each rule
     for file in filtered_files {
@@ -809,7 +846,7 @@ fn initialize_yara_rules(logger: &UnifiedLogger) -> Result<(Rules, usize), Strin
             file.path().to_string_lossy()
         ));
         // Read the rule file
-        let rules_string = match fs::read_to_string(file.path()) {
+        let rules_string = match read_rule_file(&file.path()) {
             Ok(content) => content,
             Err(e) => {
                 logger.error(&format!("Unable to read YARA rule file {:?}: {:?}", file.path(), e));
