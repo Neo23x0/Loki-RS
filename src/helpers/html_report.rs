@@ -86,8 +86,10 @@ pub fn generate_report(jsonl_path: &str, scan_config: &ScanConfig, version: &str
 pub fn parse_jsonl(path: &str) -> Result<ReportData, String> {
     let file = File::open(path)
         .map_err(|e| format!("Failed to open JSONL file: {}", e))?;
-    let reader = BufReader::new(file);
-    
+    parse_jsonl_reader(BufReader::new(file))
+}
+
+fn parse_jsonl_reader<R: BufRead>(reader: R) -> Result<ReportData, String> {
     let mut scan_start = None;
     let mut scan_end = None;
     let mut info_events = Vec::new();
@@ -2247,17 +2249,10 @@ mod tests {
 
     #[test]
     fn test_operational_yara_timeout_is_not_reported_as_finding() {
-        let path = std::env::temp_dir().join(format!(
-            "loki-yara-timeout-error-{}.jsonl",
-            std::process::id()
-        ));
-        let jsonl = r#"{"timestamp":"2026-06-18T09:09:29Z","level":"ERROR","event_type":"error","hostname":"host","message":"YARA scan timeout while scanning FILE: sample.bin - skipping and continuing","context":{"FILE":"sample.bin"}}"#;
-
-        std::fs::write(&path, jsonl).expect("write jsonl fixture");
-        let report_data = parse_jsonl(path.to_str().expect("temp path is valid UTF-8"))
-            .expect("parse jsonl fixture");
+        let jsonl = r#"{"timestamp":"2026-06-18T09:09:29Z","level":"ERROR","event_type":"error","hostname":"host","message":"YARA scan timeout while scanning FILE: sample.bin - skipping and continuing","file_path":"sample.bin"}"#;
+        let report_data = parse_jsonl_reader(std::io::Cursor::new(jsonl))
+            .expect("parse in-memory JSONL fixture");
         let html = render_findings(&report_data.findings);
-        let _ = std::fs::remove_file(&path);
 
         assert!(report_data.findings.is_empty());
         assert!(html.contains("No Findings"));

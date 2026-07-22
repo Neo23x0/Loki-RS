@@ -44,6 +44,7 @@ use crate::helpers::unified_logger::{UnifiedLogger, MatchReason, LogLevel};
 use crate::helpers::throttler::{throttle_start, throttle_end_with_limit};
 use crate::helpers::helpers::log_access_error;
 use crate::helpers::interrupt::ScanState;
+use crate::helpers::yara::{log_yara_scan_error, YaraScanTarget};
 
 const REL_EXTS: &'static [&'static str] = &[".exe", ".dll", ".bat", ".ps1", ".asp", ".aspx", ".jsp", ".jspx", 
     ".php", ".plist", ".sh", ".vbs", ".js", ".dmp", ".py", ".msix"];
@@ -945,14 +946,18 @@ fn scan_memory_buffer(
         owner: "".to_string(),
     };
     
-    let (yara_matches, yara_timed_out) = scan_file(compiled_rules, content, scan_config, &ext_vars, path_display, logger);
-    if yara_timed_out {
-        let message = format!(
-            "YARA scan timeout while scanning FILE: {} - skipping and continuing",
-            path_display
-        );
-        logger.error_w(&message, &[("FILE", path_display)]);
-    }
+    let yara_matches = match scan_file(compiled_rules, content, scan_config, &ext_vars) {
+        Ok(matches) => matches,
+        Err(error) => {
+            log_yara_scan_error(
+                logger,
+                &error,
+                YaraScanTarget::File(path_display),
+                scan_config.show_access_errors,
+            );
+            ArrayVec::new()
+        }
+    };
     for ymatch in yara_matches.iter() {
         if !sample_matches.is_full() {
             let match_message = format!("YARA match with rule {}", ymatch.rulename);
@@ -1043,13 +1048,11 @@ fn scan_file(
     file_content: &[u8],
     scan_config: &ScanConfig,
     ext_vars: &ExtVars,
-    file_label: &str,
-    logger: &UnifiedLogger,
-) -> (ArrayVec<YaraMatch, 100>, bool) {
+) -> Result<ArrayVec<YaraMatch, 100>, yara_x::ScanError> {
     // YARA-X: Create scanner from rules
     let mut scanner = Scanner::new(rules);
     
-    scanner.set_timeout(std::time::Duration::from_secs(scan_config.yara_timeout));
+    scanner.set_timeout(scan_config.yara_timeout);
     
     // Define external variables (global variables in YARA-X)
     // YARA-X accepts strings directly for set_global
@@ -1074,7 +1077,6 @@ fn scan_file(
     
     // Handle scan results
     let mut yara_matches = ArrayVec::<YaraMatch, 100>::new();
-    let mut timed_out = false;
     match results {
         Ok(scan_results) => {
             // YARA-X: Use matching_rules() to iterate over results
@@ -1157,18 +1159,9 @@ fn scan_file(
                 }
             }
         },
-        Err(e) => {
-            let err_text = format!("{:?}", e);
-            if err_text.to_lowercase().contains("timeout") {
-                timed_out = true;
-            } else if scan_config.show_access_errors {
-                logger.error(&format!("YARA-X scan error FILE: {} ERROR: {:?}", file_label, e));
-            } else {
-                logger.debug(&format!("YARA-X scan error FILE: {} ERROR: {:?}", file_label, e));
-            }
-        }
+        Err(error) => return Err(error),
     }
-    (yara_matches, timed_out)
+    Ok(yara_matches)
 }
 
 #[cfg(test)]

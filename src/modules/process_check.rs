@@ -60,6 +60,7 @@ use crate::helpers::score::calculate_weighted_score;
 use crate::helpers::unified_logger::{UnifiedLogger, MatchReason, LogLevel};
 use crate::helpers::throttler::{throttle_start, throttle_end_with_limit};
 use crate::helpers::interrupt::ScanState;
+use crate::helpers::yara::{log_yara_scan_error, YaraScanTarget};
 
 use crate::modules::{ScanModule, ScanContext, ModuleResult};
 
@@ -401,7 +402,7 @@ fn process_single_process(
     // 3. YARA scanning (Memory)
     // YARA-X: Create scanner and scan process memory
     let mut scanner = Scanner::new(compiled_rules);
-    scanner.set_timeout(std::time::Duration::from_secs(scan_config.yara_timeout));
+    scanner.set_timeout(scan_config.yara_timeout);
     
     // Read process memory
     #[cfg(target_os = "macos")]
@@ -438,21 +439,21 @@ fn process_single_process(
     #[cfg(not(target_os = "macos"))]
     let mem_data = read_process_memory(pid_u32);
 
-    #[cfg(target_os = "macos")]
-    let yara_status = if mem_stats.task_for_pid_kr != KERN_SUCCESS {
-        "denied"
-    } else if mem_data.is_empty() {
-        "skipped"
-    } else {
-        "scanned"
-    };
-    #[cfg(not(target_os = "macos"))]
-    let yara_status = if mem_data.is_empty() { "skipped" } else { "scanned" };
+    if mem_data.is_empty() {
+        #[cfg(target_os = "macos")]
+        let yara_status = if mem_stats.task_for_pid_kr != KERN_SUCCESS {
+            "denied"
+        } else {
+            "skipped"
+        };
+        #[cfg(not(target_os = "macos"))]
+        let yara_status = "skipped";
 
-    logger.info(&format!(
-        "Process YARA scan result PID={} PROC_NAME={} RESULT={}",
-        pid_u32, proc_name_str, yara_status
-    ));
+        logger.info(&format!(
+            "Process YARA scan result PID={} PROC_NAME={} RESULT={}",
+            pid_u32, proc_name_str, yara_status
+        ));
+    }
 
     #[cfg(target_os = "macos")]
     if mem_data.is_empty() {
@@ -465,82 +466,97 @@ fn process_single_process(
     }
 
     if !mem_data.is_empty() {
-        if let Ok(scan_results) = scanner.scan(&mem_data) {
-            logger.debug(&format!("YARA-X scan result for PID: {} PROC_NAME: {} RESULT: {:?}", pid_u32, proc_name_str, scan_results));
+        match scanner.scan(&mem_data) {
+            Ok(scan_results) => {
+                logger.info(&format!(
+                    "Process YARA scan result PID={} PROC_NAME={} RESULT=scanned",
+                    pid_u32, proc_name_str
+                ));
+                logger.debug(&format!("YARA-X scan result for PID: {} PROC_NAME: {} RESULT: {:?}", pid_u32, proc_name_str, scan_results));
             
-            for matching_rule in scan_results.matching_rules() {
-                if !proc_matches.is_full() {
-                    let rule_id = matching_rule.identifier().to_string();
-                    
-                    let mut description = String::new();
-                    let mut author = String::new();
-                    let mut reference = String::new();
-                    let mut score = 75;
-                    
-                    for (key, value) in matching_rule.metadata() {
-                        match key {
-                            "description" => {
-                                if let yara_x::MetaValue::String(s) = value {
-                                    description = s.to_string();
-                                }
-                            }
-                            "author" => {
-                                if let yara_x::MetaValue::String(s) = value {
-                                    author = s.to_string();
-                                }
-                            }
-                            "reference" => {
-                                if let yara_x::MetaValue::String(s) = value {
-                                    reference = s.to_string();
-                                }
-                            }
-                            "score" => {
-                                if let yara_x::MetaValue::Integer(i) = value {
-                                    let s = i as i16;
-                                    if s > 0 && s <= 100 {
-                                        score = s;
+                for matching_rule in scan_results.matching_rules() {
+                    if !proc_matches.is_full() {
+                        let rule_id = matching_rule.identifier().to_string();
+
+                        let mut description = String::new();
+                        let mut author = String::new();
+                        let mut reference = String::new();
+                        let mut score = 75;
+
+                        for (key, value) in matching_rule.metadata() {
+                            match key {
+                                "description" => {
+                                    if let yara_x::MetaValue::String(s) = value {
+                                        description = s.to_string();
                                     }
                                 }
-                            }
-                            _ => {}
-                        }
-                    }
-                    
-                    let mut matched_strings: Vec<String> = Vec::new();
-                    for pattern in matching_rule.patterns() {
-                        for pattern_match in pattern.matches() {
-                            let identifier = pattern.identifier();
-                            let offset = pattern_match.range().start;
-                            let data = pattern_match.data();
-                            
-                            let value_str = if data.iter().all(|&b: &_| b.is_ascii() && (b >= 32 || b == 9 || b == 10 || b == 13)) {
-                                match String::from_utf8(data.to_vec()) {
-                                    Ok(s) => format!("'{}'", s),
-                                    Err(_) => hex::encode(data)
+                                "author" => {
+                                    if let yara_x::MetaValue::String(s) = value {
+                                        author = s.to_string();
+                                    }
                                 }
-                            } else {
-                                hex::encode(data)
-                            };
-                            
-                            matched_strings.push(format!("{}: {} @ {}", identifier, value_str, offset));
+                                "reference" => {
+                                    if let yara_x::MetaValue::String(s) = value {
+                                        reference = s.to_string();
+                                    }
+                                }
+                                "score" => {
+                                    if let yara_x::MetaValue::Integer(i) = value {
+                                        let s = i as i16;
+                                        if s > 0 && s <= 100 {
+                                            score = s;
+                                        }
+                                    }
+                                }
+                                _ => {}
+                            }
                         }
+
+                        let mut matched_strings: Vec<String> = Vec::new();
+                        for pattern in matching_rule.patterns() {
+                            for pattern_match in pattern.matches() {
+                                let identifier = pattern.identifier();
+                                let offset = pattern_match.range().start;
+                                let data = pattern_match.data();
+
+                                let value_str = if data.iter().all(|&b: &_| b.is_ascii() && (b >= 32 || b == 9 || b == 10 || b == 13)) {
+                                    match String::from_utf8(data.to_vec()) {
+                                        Ok(s) => format!("'{}'", s),
+                                        Err(_) => hex::encode(data)
+                                    }
+                                } else {
+                                    hex::encode(data)
+                                };
+
+                                matched_strings.push(format!("{}: {} @ {}", identifier, value_str, offset));
+                            }
+                        }
+
+                        let match_message = format!("YARA-X match with rule {}", rule_id);
+
+                        proc_matches.insert(
+                            proc_matches.len(),
+                            GenMatch {
+                                message: match_message,
+                                score,
+                                description: if description.is_empty() { None } else { Some(description) },
+                                author: if author.is_empty() { None } else { Some(author) },
+                                reference: if reference.is_empty() { None } else { Some(reference) },
+                                matched_strings: if matched_strings.is_empty() { None } else { Some(matched_strings) },
+                            }
+                        );
                     }
-                    
-                    let match_message = format!("YARA-X match with rule {}", rule_id);
-                    
-                    proc_matches.insert(
-                        proc_matches.len(), 
-                        GenMatch { 
-                            message: match_message, 
-                            score,
-                            description: if description.is_empty() { None } else { Some(description) },
-                            author: if author.is_empty() { None } else { Some(author) },
-                            reference: if reference.is_empty() { None } else { Some(reference) },
-                            matched_strings: if matched_strings.is_empty() { None } else { Some(matched_strings) },
-                        }
-                    );
                 }
-            }
+            },
+            Err(error) => log_yara_scan_error(
+                logger,
+                &error,
+                YaraScanTarget::Process {
+                    pid: pid_u32,
+                    process_name: &proc_name_str,
+                },
+                scan_config.show_access_errors,
+            ),
         }
     }
     
