@@ -733,7 +733,7 @@ fn encode(path: &Path) -> Result<(), Box<dyn std::error::Error>> {
 
             match encode(&file) {
                 Err(e) => {
-                    log_warn(&format!("File {} failed to encode because {}", file.to_str().unwrap(), e));
+                    log_warn(&format!("File {} failed to encode because {}", file.display(), e));
                 }
                 _ => {}
             }
@@ -810,7 +810,7 @@ fn decode(path: &Path) -> Result<(), Box<dyn std::error::Error>> {
 
             match decode(&file) {
                 Err(e) => {
-                    log_warn(&format!("File {} failed to decode because {}", file.to_str().unwrap(), e));
+                    log_warn(&format!("File {} failed to decode because {}", file.display(), e));
                 }
                 _ => {}
             }
