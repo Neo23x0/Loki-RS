@@ -6,3 +6,4 @@ pub mod interrupt;
 pub mod tui;
 pub mod unified_logger;
 pub mod yara;
+pub mod codec;

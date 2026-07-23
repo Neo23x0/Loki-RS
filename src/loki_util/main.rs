@@ -1,4 +1,6 @@
 mod html_report;
+#[path = "../helpers/codec.rs"]
+mod codec;
 
 use std::fs;
 use std::io;
@@ -687,14 +689,6 @@ fn expand_inputs(pattern: &str) -> Result<Vec<String>, Box<dyn std::error::Error
     Ok(files)
 }
 
-fn rot47(buf: &mut [u8]) {
-    for b in buf {
-        if (33..=126).contains(b) {
-            *b = 33 + ((*b - 33 + 94 - 47) % 94);
-        }
-    }
-}
-
 use std::fs::File;
 use std::io::{BufReader, BufWriter, Read, Write};
 
@@ -770,7 +764,7 @@ fn convert_rule_file(path: &Path, convert_type: &str) -> Result<(), Box<dyn std:
             break;
         }
 
-        rot47(&mut buffer[..n]);
+        codec::rot47(&mut buffer[..n]);
 
         writer.write_all(&buffer[..n])?;
     }

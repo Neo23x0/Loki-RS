@@ -163,6 +163,7 @@ use crate::helpers::html_report;
 use crate::helpers::unified_logger::{UnifiedLogger, LoggerConfig, RemoteConfig, RemoteProtocol, RemoteFormat, LogLevel, TuiMessage};
 use crate::helpers::interrupt::ScanState;
 use crate::helpers::tui::run_tui;
+use crate::helpers::codec::rot47;
 use crate::modules::{ScanModule, ScanContext};
 use crate::modules::process_check::ProcessCheckModule;
 use crate::modules::filesystem_scan::{FileScanModule, enumerate_drives};
@@ -791,15 +792,6 @@ fn initialize_filename_iocs(logger: &UnifiedLogger) -> Vec<FilenameIOC> {
 fn get_filename_ioc_type(_filename_ioc_value: &str) -> FilenameIOCType {
     FilenameIOCType::Regex
 } 
-
-// Apply ROT47 encoding/decoding to a byte buffer.
-fn rot47(buf: &mut [u8]) {
-    for b in buf {
-        if (33..=126).contains(b) {
-            *b = 33 + ((*b - 33 + 94 - 47) % 94);
-        }
-    }
-}
 
 // Read a YARA rule file.
 // `.yar` files are read directly, while `.ryar` files are ROT47-decoded.
