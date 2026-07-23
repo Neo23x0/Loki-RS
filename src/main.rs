@@ -115,6 +115,16 @@ struct Cli {
     #[arg(short = 'm', long, default_value_t = 64_000_000, help_heading = "Tuning")]
     max_file_size: usize,
 
+    /// Maximum YARA scan time for each file or process-memory buffer, in seconds
+    #[arg(
+        long,
+        default_value_t = 10,
+        value_name = "SECONDS",
+        value_parser = clap::value_parser!(u64).range(1..),
+        help_heading = "Tuning"
+    )]
+    yara_timeout: u64,
+
     /// CPU utilization limit percentage (1-100)
     #[arg(short = 'c', long, default_value_t = 100, help_heading = "Tuning")]
     cpu_limit: u8,
@@ -197,6 +207,7 @@ pub struct ScanConfig {
     pub warning_threshold: i16,
     pub notice_threshold: i16,
     pub max_reasons: usize,
+    pub yara_timeout: std::time::Duration,
     pub threads: usize,
     pub cpu_limit: u8,
     pub exclusion_count: usize,
@@ -1281,6 +1292,7 @@ fn main() {
         warning_threshold: args.warning_level,
         notice_threshold: args.notice_level,
         max_reasons: args.max_reasons,
+        yara_timeout: std::time::Duration::from_secs(args.yara_timeout),
         threads: num_threads,
         cpu_limit: args.cpu_limit,
         exclusion_count,
@@ -1332,6 +1344,7 @@ fn main() {
     // Print scan configuration limits
     logger.info_w("Scan limits", &[
         ("MAX_FILE_SIZE", &format!("{} bytes ({:.1} MB)", scan_config.max_file_size, scan_config.max_file_size as f64 / 1_000_000.0)),
+        ("YARA_TIMEOUT", &format!("{} seconds", scan_config.yara_timeout.as_secs())),
     ]);
     logger.info_w("Scan limits", &[
         ("SCAN_ALL_TYPES", &scan_config.scan_all_types.to_string()),
@@ -1975,6 +1988,28 @@ mod tests {
         }
     }
 
+    mod cli_yara_timeout_tests {
+        use super::*;
+
+        #[test]
+        fn defaults_to_ten_seconds() {
+            let args = Cli::try_parse_from(["loki"]).expect("parse default arguments");
+            assert_eq!(args.yara_timeout, 10);
+        }
+
+        #[test]
+        fn accepts_a_positive_timeout() {
+            let args = Cli::try_parse_from(["loki", "--yara-timeout", "30"])
+                .expect("parse positive YARA timeout");
+            assert_eq!(args.yara_timeout, 30);
+        }
+
+        #[test]
+        fn rejects_a_zero_timeout() {
+            assert!(Cli::try_parse_from(["loki", "--yara-timeout", "0"]).is_err());
+        }
+    }
+
     mod scan_config_tests {
         use super::*;
 
@@ -1992,6 +2027,7 @@ mod tests {
                 warning_threshold: 60,
                 notice_threshold: 40,
                 max_reasons: 2,
+                yara_timeout: std::time::Duration::from_secs(10),
                 threads: 4,
                 cpu_limit: 100,
                 exclusion_count: 0,
@@ -2021,6 +2057,7 @@ mod tests {
                 warning_threshold: 60,
                 notice_threshold: 40,
                 max_reasons: 2,
+                yara_timeout: std::time::Duration::from_secs(10),
                 threads: 4,
                 cpu_limit: 100,
                 exclusion_count: 0,
@@ -2690,6 +2727,7 @@ mod tests {
                 warning_threshold: 60,
                 notice_threshold: 40,
                 max_reasons: 2,
+                yara_timeout: std::time::Duration::from_secs(10),
                 threads: 4,
                 cpu_limit: 100,
                 exclusion_count: 0,
@@ -3342,6 +3380,7 @@ mod tests {
                 warning_threshold: 60,
                 notice_threshold: 40,
                 max_reasons: 2,
+                yara_timeout: std::time::Duration::from_secs(10),
                 threads: 4,
                 cpu_limit: 100,
                 exclusion_count: 0,

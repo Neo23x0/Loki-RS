@@ -5,3 +5,4 @@ pub mod throttler;
 pub mod interrupt;
 pub mod tui;
 pub mod unified_logger;
+pub mod yara;

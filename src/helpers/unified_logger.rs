@@ -792,14 +792,45 @@ impl UnifiedLogger {
             context_map.insert(k.to_string(), v.to_string());
         }
 
+        self.error_with_target(msg, context_map, None, None, None);
+    }
+
+    pub fn file_error(&self, msg: &str, path: &str) {
+        self.error_with_target(
+            msg,
+            BTreeMap::new(),
+            Some(path.to_string()),
+            None,
+            None,
+        );
+    }
+
+    pub fn process_error(&self, msg: &str, pid: u32, process_name: &str) {
+        self.error_with_target(
+            msg,
+            BTreeMap::new(),
+            None,
+            Some(pid),
+            Some(process_name.to_string()),
+        );
+    }
+
+    fn error_with_target(
+        &self,
+        msg: &str,
+        context: BTreeMap<String, String>,
+        file_path: Option<String>,
+        pid: Option<u32>,
+        process_name: Option<String>,
+    ) {
         self.log(LogEvent {
             timestamp: Utc::now(),
             level: LogLevel::Error,
             event_type: EventType::Error,
             hostname: self.hostname.clone(),
             message: msg.to_string(),
-            context: context_map,
-            file_path: None, pid: None, process_name: None, score: None,
+            context,
+            file_path, pid, process_name, score: None,
             file_type: None, file_size: None, md5: None, sha1: None, sha256: None, reasons: None,
             file_created: None, file_modified: None, file_accessed: None,
             start_time: None, run_time: None, memory_bytes: None, cpu_usage: None, connection_count: None, listening_ports: None,

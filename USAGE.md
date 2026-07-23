@@ -33,6 +33,7 @@ Loki-RS - High-Performance, Multi-threaded YARA & IOC Scanner
 
 Options:
   -m, --max-file-size         Maximum file size to scan (default: 10000000)
+      --yara-timeout <SECONDS> Maximum YARA scan time per file/process in seconds (default: 10)
   -s, --show-access-errors    Show all file and process access errors
   -c, --scan-all-files        Scan all files regardless of their file type / extension
   -d, --debug                 Show debugging information
