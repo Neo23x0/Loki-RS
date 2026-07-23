@@ -705,7 +705,6 @@ fn rot47(buf: &mut [u8]) {
     }
 }
 
-use std::env;
 use std::fs::File;
 use std::io::{BufReader, BufWriter, Read, Write};
 
