@@ -150,7 +150,7 @@ fn print_usage() {
     println!("  {}  - Update Loki-RS program and signatures", "upgrade".green());
     println!("  {}     - Generate HTML report from JSONL file(s)", "html".green());
     println!("  {}   - Encode YARA rules to reduce AV false positives", "encode".green());
-    println!("  {}   - Decode YARA rules to back to its original form", "decode".green());
+    println!("  {}   - Decode YARA rules back to their original form", "decode".green());
     println!();
     println!("Encoding and decoding:");
     println!("  loki-util encode <file/dir>");
