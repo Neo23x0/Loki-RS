@@ -23,7 +23,7 @@ jobs:
       RUSTFLAGS: -L /usr/x86_64-w64-mingw32/lib
 
     steps:
-    - uses: actions/checkout@v6
+    - uses: actions/checkout@v7
 
     - name: Install Dependencies
       run: | 
